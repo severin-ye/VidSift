@@ -1,0 +1,51 @@
+name: Package and publish extension
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to resume (for example v5.2.4)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vidsift-release-assets
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag || github.ref_name }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Preserve repository source bytes
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Check version tag
+        run: node -e "if(process.env.RELEASE_TAG!=='v'+require('./package.json').version)throw Error('Tag and package version differ')"
+      - name: Run project checks
+        run: npm run check
+      - name: Build and verify reproducible ZIP
+        run: ./tests/package.test.ps1
+      - name: Upload, verify, publish, then remove older ZIP assets
+        run: npm run release:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

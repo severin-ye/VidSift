@@ -30,7 +30,22 @@ try {
  Copy-Item -LiteralPath 'docs/README.upstream.md' -Destination (Join-Path $stage 'docs')
  if(Test-Path -LiteralPath 'docs/superpowers'){Copy-Item -LiteralPath 'docs/superpowers' -Destination (Join-Path $stage 'docs') -Recurse}
  $zip=Join-Path $dist ('VidSift-'+$releaseVersion+'-standalone.zip')
- Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
+ # Stable entry order/timestamps make retries of one source commit byte-identical.
+ Add-Type -AssemblyName System.IO.Compression
+ $paths=[string[]]@(Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {$_.FullName.Substring($stage.Length+1).Replace('\','/')})
+ [Array]::Sort($paths,[StringComparer]::Ordinal)
+ $zipBuildPath=$zip+'.building-'+[guid]::NewGuid().ToString('N')
+ $zipStream=[IO.File]::Open($zipBuildPath,[IO.FileMode]::CreateNew)
+ $archive=[IO.Compression.ZipArchive]::new($zipStream,[IO.Compression.ZipArchiveMode]::Create,$false)
+ try {
+  foreach($relative in $paths){
+   $entry=$archive.CreateEntry($relative,[IO.Compression.CompressionLevel]::Optimal)
+   $entry.LastWriteTime=[DateTimeOffset]'2000-01-01T00:00:00+00:00'
+   $input=[IO.File]::OpenRead((Join-Path $stage $relative));$output=$entry.Open()
+   try{$input.CopyTo($output)}finally{$input.Dispose();$output.Dispose()}
+  }
+ }finally{$archive.Dispose();$zipStream.Dispose()}
+ Move-Item -LiteralPath $zipBuildPath -Destination $zip -Force
  $stream=[IO.File]::OpenRead($zip);$sha=[Security.Cryptography.SHA256]::Create()
  try{$hash=([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','')}finally{$sha.Dispose();$stream.Dispose()}
  $receipt=@{version=$releaseVersion;extensionId=$extensionId;originalExtensionReplaced=$false;sha256=$hash;package=(Split-Path $zip -Leaf);status='test-package';acceptance='See README for real-site verification gaps'}

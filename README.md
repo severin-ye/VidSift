@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/severin-ye/VidSift/releases/tag/v5.2.3">下载与发布说明</a> ·
+  <a href="https://github.com/severin-ye/VidSift/releases">下载与发布说明</a> ·
   <a href="#快速开始">安装方法</a> ·
   <a href="#使用方式">使用方式</a> ·
   <a href="./INSTALL.md">完整安装说明</a> ·
@@ -29,7 +29,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/severin-ye/VidSift/releases/download/v5.2.3/VidSift-5.2.3-standalone.zip"><strong>⬇ 下载扩展 ZIP · v5.2.3 测试版</strong></a>
+  <a href="https://github.com/severin-ye/VidSift/releases"><strong>⬇ 打开最新版 ZIP 下载页（测试版）</strong></a>
 </p>
 
 - **普通用户从发布页下载 ZIP 即可，不需要克隆代码，也不需要安装 Node.js 或 npm。**
@@ -103,7 +103,7 @@
 
 ### 1. 下载、解压并加载
 
-1. 打开[发布页](https://github.com/severin-ye/VidSift/releases/tag/v5.2.3)，在 **Assets** 中下载 `VidSift-5.2.3-standalone.zip`，也可以[直接下载 ZIP](https://github.com/severin-ye/VidSift/releases/download/v5.2.3/VidSift-5.2.3-standalone.zip)。
+1. 打开[最新版下载页](https://github.com/severin-ye/VidSift/releases)，在最新一条发布记录的 **Assets** 中下载 `VidSift-版本号-standalone.zip`。
 2. 将 ZIP 全部解压到固定文件夹，确认其中能看到 `manifest.json`，不要只在压缩软件内打开。
 3. 在 Chrome 打开 `chrome://extensions`，或在 Edge 打开 `edge://extensions`，开启“开发者模式”。
 4. 点击“加载已解压的扩展程序”，选择上一步包含 `manifest.json` 的文件夹，按浏览器提示确认权限。
@@ -122,7 +122,7 @@
 - 在 VidSift 文件夹打开 PowerShell，执行：
 
 ```powershell
-.\installer\Install-NativeHost.ps1 -ProjectRoot (Get-Location).Path -Version 5.2.3
+.\installer\Install-NativeHost.ps1 -ProjectRoot (Get-Location).Path -Version (Get-Content .\package.json -Raw | ConvertFrom-Json).version
 ```
 
 - 安装器会在 `%LOCALAPPDATA%\VidSift` 创建 Python 3.12 环境，安装媒体依赖，并注册 Chrome / Edge 的 Native Messaging 主机。
@@ -296,6 +296,15 @@ npm run package
 | `native/` / `installer/` | 本机媒体程序与 Windows 安装、回退脚本。 |
 | `tests/` | 扩展逻辑、本机程序和浏览器流程测试。 |
 | `scripts/` | 版本同步、资源检查与打包脚本。 |
+
+### 自动发版（维护者）
+
+- 推送与 `package.json.version` 一致的 `vX.Y.Z` 标签后，GitHub Actions 会自动检查、打包、上传并下载校验 ZIP，成功后才清理更旧的扩展 ZIP。
+- 在 GitHub 发布版本也会触发同一流程，发布任务按仓库串行执行，重复触发会复用已校验的相同文件。
+- 旧版只移除匹配 `VidSift-版本号-standalone.zip` 的安装包及其校验文件，保留标签、历史发布说明、其他附件和 GitHub 自动源码归档。
+- 上传或校验失败时保留旧包；可在 [Actions](https://github.com/severin-ye/VidSift/actions/workflows/release.yml) 重跑失败任务，或选择“Run workflow”并填写已有版本标签，无需 Agent 手工打包、上传或删除附件。
+- 下载入口始终指向包含测试版的[最新版发布列表](https://github.com/severin-ye/VidSift/releases)，今后不需要手改 README 中的版本下载链接。
+- 自动创建的版本默认标为测试版，脚本不会把既有版本强行改为稳定版。
 
 ## 开源协议与致谢
 

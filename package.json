@@ -1,6 +1,6 @@
 {
   "name": "vidsift",
-  "version": "5.2.3",
+  "version": "5.2.4",
   "private": true,
   "description": "B站、YouTube、抖音内容提取并发送到 ChatGPT / AI Studio",
   "license": "MIT",
@@ -12,7 +12,8 @@
     "version:check": "node scripts/version.cjs",
     "check": "node scripts/check.cjs && npm run version:check && npm test",
     "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Package.ps1",
-    "test:edge": "node tests/browser-flow.cjs"
+    "test:edge": "node tests/browser-flow.cjs",
+    "release:publish": "node scripts/publish-release.cjs"
   },
   "devDependencies": {
     "playwright": "1.65.0"
