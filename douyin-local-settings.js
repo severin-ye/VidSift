@@ -1,7 +1,7 @@
 (function(root){
  'use strict';
  const MiB=1048576;
- const defaults=Object.freeze({model:'Xenova/whisper-base',device:'wasm',threads:4,maxDuration:3600,maxSourceBytes:512*MiB,cacheBytes:1024*MiB,failureTtlHours:24,successTtlHours:1,memoryBudgetMiB:2048});
+ const defaults=Object.freeze({model:'Xenova/whisper-small',device:'wasm',threads:4,maxDuration:3600,maxSourceBytes:512*MiB,cacheBytes:1024*MiB,failureTtlHours:24,successTtlHours:1,memoryBudgetMiB:6144});
  const models=Object.freeze({'Xenova/whisper-base':'64da57285918e20ea79ea5c88eed7197933abaa8','Xenova/whisper-small':'2d67713f236afa48a18992566e7647f6ca848e13'});
  const services=new Set(['global','local','aistudio','selfhosted']);
  function validate(value={}){

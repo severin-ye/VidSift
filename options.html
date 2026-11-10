@@ -279,8 +279,8 @@ html, body {
   <div class="local-subsection" id="douyinLocalBlock">
     <p>抖音默认在本机浏览器转写，完成后交给 GPT；B站和 YouTube 沿用下方全局设置。</p>
     <label>转写方式 <select id="douyinService"><option value="local">浏览器 Whisper</option><option value="global">跟随全局</option><option value="aistudio">AI Studio</option><option value="selfhosted">自建服务</option></select></label>
-    <p><label>量化模型 <select id="douyinModel"><option value="Xenova/whisper-base">base · 权重约77 MB</option><option value="Xenova/whisper-small">small · 权重约249 MB</option></select></label></p>
-    <p><label>设备 <select id="douyinDevice"><option value="wasm">CPU / WASM（本机已验证）</option><option value="webgpu">WebGPU（实验选项，本机质量未通过）</option></select></label> <label>CPU线程 <input id="douyinThreads" type="number" min="1" max="8" style="width:65px"></label></p>
+    <p><label>量化模型 <select id="douyinModel"><option value="Xenova/whisper-base">base · 约77 MB（较快，中文错字较多）</option><option value="Xenova/whisper-small">small · 约249 MB（中文推荐）</option></select></label></p>
+    <p><label>设备 <select id="douyinDevice"><option value="wasm">CPU / WASM（本机已验证）</option><option value="webgpu" disabled>WebGPU（本机质量未通过，暂停选择）</option></select></label> <label>CPU线程 <input id="douyinThreads" type="number" min="1" max="8" style="width:65px"></label></p>
     <p><label>最长视频（分钟） <input id="douyinMaxMinutes" type="number" min="1" max="360" style="width:75px"></label> <label>来源文件上限（MiB） <input id="douyinMaxBytes" type="number" min="1" max="4096" style="width:85px"></label></p>
     <p><label>媒体缓存上限（MiB） <input id="douyinCacheBytes" type="number" min="64" max="20480" style="width:85px"></label> <label>启动内存预估上限（MiB） <input id="douyinMemory" type="number" min="512" max="8192" style="width:85px"></label></p>
     <p class="hint">启动前按模型大小保守估算内存；这不是浏览器进程的硬限额，实际占用由浏览器和推理运行时决定。</p>

@@ -1,9 +1,9 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const settings=require('../douyin-local-settings.js');
-test('Douyin defaults to quantized base on WASM without changing other platform choices',()=>{
+test('Douyin defaults to quantized small on WASM without changing other platform choices',()=>{
  const old={transcribeService:'selfhosted',localModel:'custom/model',customPrompt:'keep'};
  const resolved=settings.resolve('douyin',old);
- assert.equal(resolved.service,'local');assert.equal(resolved.model,'Xenova/whisper-base');assert.equal(resolved.device,'wasm');
+ assert.equal(resolved.service,'local');assert.equal(resolved.model,'Xenova/whisper-small');assert.equal(resolved.device,'wasm');
  assert.equal(settings.resolve('youtube',old).service,'selfhosted');assert.equal(settings.resolve('youtube',old).model,'custom/model');
  assert.deepEqual(old,{transcribeService:'selfhosted',localModel:'custom/model',customPrompt:'keep'});
 });

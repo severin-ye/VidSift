@@ -5,6 +5,23 @@ from pathlib import Path
 from native import host
 
 class LocalAudioTests(unittest.TestCase):
+    def test_cache_atomic_save_recovers_brief_windows_file_lock(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            store=host.LocalAudioCache(Path(directory),'test');store.root.mkdir();entry={'fingerprint':'a'*64,'value':1}
+            real_replace=Path.replace;attempts=[]
+            def locked(source,target):
+                attempts.append(1)
+                if len(attempts)<3:raise PermissionError(5,'brief sharing denial')
+                return real_replace(source,target)
+            with patch.object(Path,'replace',locked),patch.object(host.time,'sleep'):
+                store.save(entry)
+            self.assertEqual(len(attempts),3)
+            self.assertIn('"value": 1',store.metadata_path(entry['fingerprint']).read_text())
+            with patch.object(Path,'replace',side_effect=PermissionError(5,'persistent denial')) as operation,patch.object(host.time,'sleep'):
+                with self.assertRaises(PermissionError):store.save(entry)
+                self.assertEqual(operation.call_count,4)
+            self.assertFalse(list(store.root.glob('*.tmp')))
     def test_pcm_rounding_padding_is_bounded_and_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             path=Path(directory)/'window.pcm';path.write_bytes(b'\0'*(15960*4))

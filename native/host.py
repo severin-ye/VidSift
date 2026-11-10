@@ -500,7 +500,17 @@ class LocalAudioCache:
     def save(self, entry):
         path = self.metadata_path(entry['fingerprint'])
         temporary = path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
-        temporary.write_text(json.dumps(entry), encoding='utf-8'); temporary.replace(path)
+        try:
+            temporary.write_text(json.dumps(entry), encoding='utf-8')
+            for attempt in range(4):
+                try:
+                    temporary.replace(path)
+                    break
+                except PermissionError:
+                    if attempt == 3: raise
+                    time.sleep(.05 * (attempt + 1))
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @staticmethod
     def descriptor(entry):

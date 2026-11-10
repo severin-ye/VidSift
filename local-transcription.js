@@ -48,8 +48,9 @@
   async _send(t,action,extra={}){this._check(t);const r=await this.runtime.sendMessage({target:'offscreen-local',action,taskId:t.taskId,token:t.token,...extra});this._check(t);if(!r?.ok)throw Error(r?.error||'本地转写工作线程未响应');return r;}
   async _run(t,d){
    // Admission estimate only: browser/ORT process memory cannot be hard-capped here.
-   const weights=t.model==='small'?249105759:76908389,estimatedMiB=Math.ceil((weights*4+256*1048576)/1048576),budget=Number(t.settings?.memoryBudgetMiB)||2048;
+   const weights=t.model==='small'?249105759:76908389,estimatedMiB=Math.ceil((weights*16+512*1048576)/1048576),budget=Number(t.settings?.memoryBudgetMiB)||6144;
    if(estimatedMiB>budget)throw Error(`所选模型的启动内存预估约${estimatedMiB}MiB，超过设置的${budget}MiB；请提高预估上限或选择较小模型`);
+   if(t.device==='webgpu'){t.onProgress?.('本机WebGPU中文质量未通过，使用WASM转写');t.device='wasm';}
    await this.ensureOffscreen();this._check(t);const key=`local-transcription-cache:${d.fingerprint}:${t.model}:${MODELS[t.model].revision}`;
    const all=await this.storage.get(null);this._check(t);const now=Date.now();let used=0;const remove=[];
    for(const [k,v] of Object.entries(all||{}).filter(([k])=>k.startsWith('local-transcription-cache:')).sort((a,b)=>(b[1]?.updatedAt||0)-(a[1]?.updatedAt||0))){used+=JSON.stringify(v).length*2;const ttl=(v?.complete?Number(t.settings?.successTtlHours??1):Number(t.settings?.failureTtlHours??24))*3600000;if(now-(v?.updatedAt||0)>ttl||used>4*1024*1024)remove.push(k);}
