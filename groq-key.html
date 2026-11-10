@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>配置 Groq API Key</title><link rel="stylesheet" href="groq-key.css"></head>
+<body><main><h1>配置 Groq API Key</h1><p>当前视频需要将音频转写为字幕，但本机还没有配置 Groq 密钥。</p>
+<form id="keyForm"><label for="apiKey">Groq API Key</label><input id="apiKey" type="password" autocomplete="off" spellcheck="false" maxlength="512" placeholder="粘贴以 gsk_ 开头的密钥" required disabled>
+<p class="hint">保存时会向 Groq 验证密钥；成功后仅加密保存在当前 Windows 用户的本机目录，随后继续原任务。</p>
+<div class="actions"><button id="save" type="submit" disabled>保存并继续</button><button id="cancel" type="button">取消</button></div></form>
+<p id="status" role="status" aria-live="polite">正在确认配置窗口…</p>
+<div class="signup"><span>还没有密钥？</span> <button id="signup" type="button">申请 Groq API Key ↗</button></div>
+</main><script src="groq-key.js"></script></body></html>

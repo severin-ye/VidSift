@@ -1,6 +1,12 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {NativeMediaClient}=require('../native-client.js');
+test('Groq credential save uses Native Messaging and returns presence only',async()=>{
+ const r=runtime(),c=new NativeMediaClient(r),promise=c.storeGroqKey('synthetic-key');
+ assert.equal(r.p.last.action,'groq_store_key');assert.equal(r.p.last.apiKey,'synthetic-key');
+ r.p.onMessage.emit({id:r.p.last.id,type:'result',result:{configured:true}});
+ assert.deepEqual(await promise,{configured:true});c.close();
+});
 function event(){const listeners=[];return {addListener:f=>listeners.push(f),emit:x=>listeners.forEach(f=>f(x))};}
 function runtime(){const p={onMessage:event(),onDisconnect:event(),postMessage:m=>p.last=m,disconnect:()=>p.onDisconnect.emit()};return {p,connectNative:()=>p};}
 test('Groq requests only descriptor and settings and discards cancelled late results',async()=>{

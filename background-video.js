@@ -58,10 +58,16 @@ async function sendVideoAIStudio(data){
 }
 let _localTranscription;
 let _localMediaCache;
+let _groqCredentialPrompt;
+function groqCredentialPrompt(){return _groqCredentialPrompt??=new GroqCredentialPrompt(chrome);}
 async function transcribeVideo(audio,data,notify,signal){
  if(data.transcribeService==='groq'){
   if(!data.localAudio||typeof data.task.client.transcribeGroq!=='function')throw new Error('本机程序不支持Groq转写，请更新本包本机程序');
   if(signal.aborted)throw new Error('视频处理已取消');
+  await groqCredentialPrompt().ensure({client:data.task.client,task:data.task,signal,assertLive:()=>_videoWorkflow.assertLive(data.task),onWait:()=>{
+   diagnoseTask(data.task,'groq.key_required');notify('STATUS','请在新窗口填写 Groq API Key，保存后继续当前音频转写...');
+  }});
+  await _videoWorkflow.assertLive(data.task);
   diagnoseTask(data.task,'groq.start');notify('STATUS','正在上传完整音轨到Groq并转写...');
   const result=await data.task.client.transcribeGroq(data.localAudio,data.groqSettings,text=>notify('STATUS',text));
   if(signal.aborted||data.task.cancelled)throw new Error('视频处理已取消');
@@ -132,6 +138,13 @@ chrome.runtime.onConnect.addListener(port=>{
  });
 });
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
+ if(['VIDSIFT_GROQ_KEY_READY','VIDSIFT_GROQ_KEY_SAVE'].includes(msg.type)){
+  groqCredentialPrompt().handle(msg,sender).then(sendResponse,()=>sendResponse({ok:false,error:'密钥配置未完成，请重新打开配置窗口'}));return true;
+ }
+ if(msg.type==='VIDSIFT_GROQ_CONFIGURE'){
+  if(sender.id!==chrome.runtime.id||sender.url!==chrome.runtime.getURL('options.html')){sendResponse({ok:false});return false;}
+  (async()=>{let client;try{client=new NativeMediaClient();await groqCredentialPrompt().ensure({client});sendResponse({ok:true,configured:true});}catch(e){sendResponse({ok:false,error:e.message});}finally{client?.close();}})();return true;
+ }
  if(msg.type==='VIDSIFT_GROQ_STATUS'){
   if(sender.id!==chrome.runtime.id||sender.url!==chrome.runtime.getURL('options.html')){sendResponse({ok:false});return false;}
   (async()=>{let client;try{client=new NativeMediaClient();sendResponse({ok:true,...await client.groqStatus()});}catch(e){sendResponse({ok:false,error:e.message});}finally{client?.close();}})();return true;

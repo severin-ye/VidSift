@@ -349,7 +349,7 @@ GROQ_MODELS = ('whisper-large-v3', 'whisper-large-v3-turbo')
 GROQ_UPLOAD_LIMIT = 24_000_000
 
 
-def groq_key():
+def groq_external_key():
     value = os.environ.get('GROQ_API_KEY', '').strip()
     if value: return value
     try:
@@ -362,6 +362,129 @@ def groq_key():
                 return value
     except (OSError, UnicodeError): pass
     return ''
+
+
+def _groq_windows():
+    return os.name == 'nt'
+
+
+def _groq_valid_key(value):
+    return (isinstance(value, str) and 20 <= len(value) <= 512
+            and value.startswith('gsk_') and all(33 <= ord(char) <= 126 for char in value))
+
+
+def _groq_dpapi(data, *, protect):
+    """Current-user DPAPI only: no machine scope, UI, or plaintext fallback."""
+    if not _groq_windows():
+        raise ValueError('Groq 密钥安全保存仅支持 Windows')
+    import ctypes
+    from ctypes import wintypes
+
+    class Blob(ctypes.Structure):
+        _fields_ = [('cbData', wintypes.DWORD), ('pbData', ctypes.POINTER(ctypes.c_ubyte))]
+
+    crypt32 = ctypes.WinDLL('crypt32', use_last_error=True)
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    source_buffer = ctypes.create_string_buffer(data, len(data))
+    source = Blob(len(data), ctypes.cast(source_buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    output = Blob()
+    if protect:
+        operation = crypt32.CryptProtectData
+        operation.argtypes = [ctypes.POINTER(Blob), wintypes.LPCWSTR, ctypes.POINTER(Blob),
+                              ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+    else:
+        operation = crypt32.CryptUnprotectData
+        operation.argtypes = [ctypes.POINTER(Blob), ctypes.POINTER(wintypes.LPWSTR), ctypes.POINTER(Blob),
+                              ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(Blob)]
+    operation.restype = wintypes.BOOL
+    try:
+        # CRYPTPROTECT_UI_FORBIDDEN; omit CRYPTPROTECT_LOCAL_MACHINE.
+        if not operation(ctypes.byref(source), None, None, None, None, 1, ctypes.byref(output)):
+            raise ValueError('Groq 密钥加密或读取失败，请重新配置')
+        return ctypes.string_at(output.pbData, output.cbData)
+    finally:
+        ctypes.memset(source_buffer, 0, len(data))
+        if output.pbData:
+            ctypes.memset(output.pbData, 0, output.cbData)
+            kernel32.LocalFree(ctypes.cast(output.pbData, ctypes.c_void_p))
+
+
+def groq_key():
+    value = groq_external_key()
+    if value:
+        return value
+    try:
+        path = ROOT / 'runtime' / 'credentials' / 'groq.dpapi'
+        with path.open('rb') as stream:
+            encrypted = stream.read(16385)
+        if not 0 < len(encrypted) <= 16384:
+            return ''
+        value = _groq_dpapi(encrypted, protect=False).decode('ascii')
+        return value if _groq_valid_key(value) else ''
+    except Exception:
+        # Missing, corrupt, or another Windows user's encrypted data is not a
+        # configured credential. Never include its contents or OS error text.
+        return ''
+
+
+_GROQ_CREDENTIAL_LOCK = threading.Lock()
+
+
+def groq_store_key(request, job=None):
+    with _GROQ_CREDENTIAL_LOCK:
+        if groq_external_key():
+            return {'configured': True, 'existing': True, 'source': 'external'}
+        key = request.get('apiKey')
+        if not _groq_valid_key(key):
+            raise ValueError('Groq API Key 格式无效，请填写以 gsk_ 开头的完整密钥')
+        if not _groq_windows():
+            raise ValueError('Groq 密钥安全保存仅支持 Windows')
+        if job:
+            job.check()
+        import requests
+        try:
+            response = requests.get('https://api.groq.com/openai/v1/models',
+                                    headers={'Authorization': 'Bearer ' + key},
+                                    timeout=12, allow_redirects=False, stream=True)
+            try:
+                status = response.status_code
+            finally:
+                response.close()
+        except Exception:
+            raise ValueError('Groq 密钥校验连接失败或超时，未保存，请稍后重试') from None
+        if status in (401, 403):
+            raise ValueError('Groq API Key 无效或无访问权限，未保存，请检查密钥')
+        if status != 200:
+            raise ValueError('Groq 密钥校验服务暂时不可用，未保存，请稍后重试')
+        if job:
+            job.check()
+        try:
+            encrypted = _groq_dpapi(key.encode('ascii'), protect=True)
+        except Exception:
+            raise ValueError('Groq 密钥加密失败，未保存，请检查 Windows 当前用户环境') from None
+        path = ROOT / 'runtime' / 'credentials' / 'groq.dpapi'
+        temporary = path.with_name('groq.' + uuid.uuid4().hex + '.tmp')
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with temporary.open('xb') as stream:
+                stream.write(encrypted)
+                stream.flush()
+                os.fsync(stream.fileno())
+            if job:
+                job.check()
+            os.replace(temporary, path)
+        except Cancelled:
+            raise
+        except Exception:
+            raise ValueError('Groq 加密密钥保存失败，原有配置已保留，请重试') from None
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return {'configured': True}
 
 
 def groq_settings(request):
@@ -871,7 +994,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.4.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.5.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
@@ -1448,6 +1571,8 @@ class Host:
                 result = self.service.resolve(request, job, progress)
             elif action == 'transcribe_groq':
                 result = self.service.transcribe_groq(request, job, progress)
+            elif action == 'groq_store_key':
+                result = groq_store_key(request, job)
             elif action == 'prepare_local_audio':
                 result = self.service.local_audio.claim(request.get('fingerprint'), request.get('videoId'))
                 job.check()
@@ -1529,7 +1654,7 @@ class Host:
             self.emit({'id': task_id, 'type': 'result', 'result': diagnostics()})
         elif action == 'groq_status':
             self.emit({'id': task_id, 'type': 'result', 'result': {'configured':bool(groq_key())}})
-        elif action in ('resolve', 'prepare_local_audio', 'local_audio_finish', 'read_pcm_window', 'model_file_info', 'model_file_chunk', 'transcribe_groq'):
+        elif action in ('resolve', 'prepare_local_audio', 'local_audio_finish', 'read_pcm_window', 'model_file_info', 'model_file_chunk', 'transcribe_groq', 'groq_store_key'):
             with self.lock:
                 if task_id in self.jobs or len(self.jobs) >= 2:
                     raise ValueError('任务编号已在使用，或本地任务数量已达上限')
