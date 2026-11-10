@@ -5,6 +5,7 @@ let cachedHasSubtitle = null; // true/false/null (null = not checked yet)
 let transcribeService = 'aistudio'; // 'aistudio' | 'selfhosted' | 'local'
 let localModel = null;
 let localDevice = null;
+let douyinLocalSettings = null;
 let activeTranscribeTask = null;
 let statusTabId = null;
 let viewingTaskTarget = false;
@@ -290,7 +291,7 @@ async function run() {
 
     const identity = VidSiftPlatforms.identify(pageUrl);
     if (identity.platform !== 'bilibili' || screenshotCheckbox.checked) {
-      if (transcribeService === 'local') {
+      if (transcribeService === 'local' && identity.platform !== 'douyin') {
         const granted = await chrome.permissions.request({origins:['https://*.huggingface.co/*','https://cdn.jsdelivr.net/*']});
         if (!granted) throw new Error('本地模型权限未授予，请在设置页完成配置');
       }
@@ -310,7 +311,7 @@ async function run() {
         }
       });
       port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看处理状态');}});
-      port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:pageUrl,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,selfHostedUrl:config.selfHostedApiUrl,selfHostedToken:config.selfHostedApiToken});
+      port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:pageUrl,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,selfHostedUrl:config.selfHostedApiUrl,selfHostedToken:config.selfHostedApiToken});
       handedOff=true; canClose=true;cancelBtn.style.display='';runBtn.disabled=true;setStatus('已移交后台；重新打开扩展可查看进度');return;
     }
 
@@ -486,7 +487,7 @@ runBtn.addEventListener('click', run);
 (async () => {
   try {
     // 先加载服务来源配置
-    const storageResult = await chrome.storage.local.get(['transcribeService', 'localModel', 'localDevice', 'screenshotSettings','audioSettings']);
+    const storageResult = await chrome.storage.local.get(['transcribeService', 'localModel', 'localDevice', 'screenshotSettings','audioSettings','douyinTranscribeService','douyinLocalSettings']);
     screenshotSettings = ScreenshotSettings.normalize(storageResult.screenshotSettings);
     audioSettings = AudioSettings.normalize(storageResult.audioSettings);
     screenshotCheckbox.checked=screenshotSettings.enabled;
@@ -500,6 +501,10 @@ runBtn.addEventListener('click', run);
     const pageUrl = tab.url || '';
     popupDiagnostic(popupDiagnosticId,'popup.source',{},tab.id,pageUrl);
     currentPlatform=VidSiftPlatforms.identify(pageUrl)?.platform || '';
+    if(currentPlatform==='douyin'){
+      const selected=DouyinLocalSettings.resolve('douyin',storageResult);
+      transcribeService=selected.service;localModel=selected.model;localDevice=selected.device;douyinLocalSettings=selected.settings;updateUI();
+    }
     const taskStatus = await getActiveTranscribeTask(tab.id);
     if (!VidSiftPlatforms.identify(pageUrl)) {
       viewingTaskTarget=true;

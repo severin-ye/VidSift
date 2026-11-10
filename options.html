@@ -275,6 +275,19 @@ html, body {
 <div class="container">
 
   <!-- 音频转写服务配置 -->
+  <div class="section-title">抖音转写</div>
+  <div class="local-subsection" id="douyinLocalBlock">
+    <p>抖音默认在本机浏览器转写，完成后交给 GPT；B站和 YouTube 沿用下方全局设置。</p>
+    <label>转写方式 <select id="douyinService"><option value="local">浏览器 Whisper</option><option value="global">跟随全局</option><option value="aistudio">AI Studio</option><option value="selfhosted">自建服务</option></select></label>
+    <p><label>量化模型 <select id="douyinModel"><option value="Xenova/whisper-base">base · 权重约77 MB</option><option value="Xenova/whisper-small">small · 权重约249 MB</option></select></label></p>
+    <p><label>设备 <select id="douyinDevice"><option value="wasm">CPU / WASM（本机已验证）</option><option value="webgpu">WebGPU（实验选项，本机质量未通过）</option></select></label> <label>CPU线程 <input id="douyinThreads" type="number" min="1" max="8" style="width:65px"></label></p>
+    <p><label>最长视频（分钟） <input id="douyinMaxMinutes" type="number" min="1" max="360" style="width:75px"></label> <label>来源文件上限（MiB） <input id="douyinMaxBytes" type="number" min="1" max="4096" style="width:85px"></label></p>
+    <p><label>媒体缓存上限（MiB） <input id="douyinCacheBytes" type="number" min="64" max="20480" style="width:85px"></label> <label>启动内存预估上限（MiB） <input id="douyinMemory" type="number" min="512" max="8192" style="width:85px"></label></p>
+    <p class="hint">启动前按模型大小保守估算内存；这不是浏览器进程的硬限额，实际占用由浏览器和推理运行时决定。</p>
+    <p><label>失败媒体保留（小时） <input id="douyinFailureHours" type="number" min="1" max="168" style="width:65px"></label> <label>成功媒体保留（小时） <input id="douyinSuccessHours" type="number" min="0" max="48" style="width:65px"></label></p>
+    <p>模型首次自动下载并校验，在本机共享模型目录复用；媒体分段读取，取消后停止计算，本地失败不会自动上传 AI Studio。</p>
+    <div class="btn-row"><button class="save-btn" id="douyinLocalSave">保存本块</button><button class="reset-btn" id="douyinLocalReset">恢复本块默认</button><span id="douyinLocalStatus" role="status"></span></div>
+  </div>
   <div class="section-title">音频转写服务</div>
   <div class="radio-group">
     <label class="radio-label">
@@ -478,6 +491,8 @@ html, body {
 </div>
 <script src="screenshot-settings.js"></script>
 <script src="audio-settings.js"></script>
+<script src="douyin-local-settings.js"></script>
+<script src="options-local.js"></script>
 <script src="video-library.js"></script>
 <script src="options.js"></script>
 </body>

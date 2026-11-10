@@ -2,11 +2,34 @@ const {test}=require('node:test');const assert=require('node:assert/strict');
 const {VideoWorkflow}=require('../video-workflow.js');
 function fixture(result){
  const sent=[],released=[];let resolveTarget;
- const client={resolve:async()=>result,readAsset:async a=>({name:a+'.jpg',mime:'image/jpeg',base64:'YWJj'}),release:async a=>released.push(...a),close(){},cancel(){}};
+ const client={resolve:async()=>result,readAsset:async a=>({name:a+'.jpg',mime:'image/jpeg',base64:'YWJj'}),readPcmWindow:async()=>{throw Error('unexpected PCM read in workflow orchestration test');},release:async a=>released.push(...a),close(){},cancel(){}};
  const deps={identify:require('../platforms').identify,toSrt:require('../platforms').toSrt,normalize:s=>s||{enabled:false},getTab:async()=>({url:'https://www.youtube.com/watch?v=abc123XYZ_0'}),client:()=>client,
  lock(){},unlock(){},existing:()=>null,sendChatGPT:async data=>{sent.push(data);await new Promise(r=>resolveTarget=r);},sendAIStudio:async data=>{sent.push(data);return {transcript:'1\n00:00:00,000 --> 00:00:10,000\nfixture complete'};},transcribe:async()=>'',cancelTarget(){}};
  return {workflow:new VideoWorkflow(deps),deps,client,sent,released,complete:()=>resolveTarget()};
 }
+
+test('Douyin local transcription reads bounded PCM through descriptor without reading whole audio',async()=>{
+ const id='7703625319965543714',url='https://www.douyin.com/video/'+id;
+ const localAudio={fingerprint:'a'.repeat(64),videoId:id,duration:301,sampleRate:16000};
+ const f=fixture({platform:'douyin',videoId:id,duration:301,audio:{assetId:'aud'},audioInfo:{},localAudio,images:[]});
+ f.deps.getTab=async()=>({url});let request,wholeReads=0,completed;
+ f.client.resolve=async value=>{request=value;return {platform:'douyin',videoId:id,duration:301,audio:{assetId:'aud'},audioInfo:{},localAudio,images:[]};};
+ f.client.readAsset=async()=>{wholeReads++;throw Error('whole audio must not be read');};
+ f.client.finishLocalAudio=async(desc,status)=>{completed={desc,status};};
+ f.deps.transcribe=async(audio,data)=>{assert.equal(audio,null);assert.deepEqual(data.localAudio,localAudio);return '1\n00:00:00,000 --> 00:00:01,000\n中文';};
+ const running=f.workflow.start({openerTabId:1,sourceUrl:url,transcribeService:'local',localSettings:{maxDuration:3600}},()=>{});
+ await new Promise(r=>setImmediate(r));if(f.sent.length)f.complete();await running;
+ assert.equal(request.localTranscription,true);assert.equal(request.localSettings.maxDuration,3600);assert.equal(wholeReads,0);
+ assert.equal(f.sent.length,1);assert.match(f.sent[0].file.content,/中文/);assert.equal(completed.status,'success');
+});
+
+test('failed local transcription preserves retry lease and never sends to GPT',async()=>{
+ const id='7703625319965543714',url='https://www.douyin.com/video/'+id,localAudio={fingerprint:'a'.repeat(64),videoId:id,duration:5};
+ const f=fixture({platform:'douyin',videoId:id,duration:5,audio:{assetId:'aud'},audioInfo:{},localAudio,images:[]});f.deps.getTab=async()=>({url});let outcome;
+ f.client.finishLocalAudio=async(_,status)=>{outcome=status;};f.deps.transcribe=async()=>{throw Error('窗口转写失败');};
+ await assert.rejects(f.workflow.start({openerTabId:1,sourceUrl:url,transcribeService:'local'}),/窗口转写失败/);
+ assert.equal(outcome,'failed');assert.equal(f.sent.length,0);
+});
 test('Douyin passes only current browser original-video snapshot into native acquisition',async()=>{
  const id='7695816752525053222',url='https://www.douyin.com/jingxuan/knowledge?modal_id='+id;
  const result={platform:'douyin',videoId:id,title:'current',duration:10,audio:{assetId:'aud'},images:[]};const f=fixture(result);let request;

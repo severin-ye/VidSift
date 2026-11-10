@@ -407,6 +407,287 @@ class Job:
                 self.process = None
 
 
+import hashlib
+import ctypes
+from contextlib import contextmanager
+
+
+def file_hash(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def local_settings(values):
+    defaults = {'maxDuration': 3600, 'maxSourceBytes': 536870912, 'cacheBytes': 1073741824, 'failureTtlHours': 24, 'successTtlHours': 1}
+    if values is None: values = {}
+    if not isinstance(values, dict): raise ValueError('本地转写设置无效')
+    for key in defaults:
+        value = values.get(key, defaults[key])
+        if not positive_number(value) and not (key == 'successTtlHours' and isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0): raise ValueError('本地转写设置无效：' + key)
+        defaults[key] = value
+    return defaults
+
+
+def finalize_pcm_window(path, duration):
+    size = path.stat().st_size
+    expected = round(duration * 16000) * 4
+    if not size or size % 4 or size > expected or expected - size > 6400:
+        raise ValueError('PCM 窗口实际覆盖不足或超过上限')
+    padding_samples = (expected - size) // 4
+    if padding_samples:
+        with path.open('ab') as stream: stream.write(b'\0' * (expected - size))
+    return expected, padding_samples
+
+
+def process_alive(pid):
+    if pid == os.getpid(): return True
+    if os.name == 'nt':
+        kernel = ctypes.windll.kernel32
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        handle = kernel.OpenProcess(0x1000, False, pid)
+        if not handle: return False
+        code = ctypes.c_ulong()
+        try: return bool(kernel.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+        finally: kernel.CloseHandle(handle)
+    try: os.kill(pid, 0); return True
+    except ProcessLookupError: return False
+    except PermissionError: return True
+
+
+class LocalAudioCache:
+    def __init__(self, root, connection):
+        self.root = Path(root).resolve() / 'local-audio'
+        self.connection = connection
+        self.lock = threading.RLock()
+        self.window_lock = threading.Lock()
+
+    @contextmanager
+    def transaction(self):
+        # Separate Native host connections share one cache; lock metadata updates.
+        self.root.mkdir(parents=True, exist_ok=True)
+        with self.lock, (self.root / '.lock').open('a+b') as stream:
+            stream.seek(0); stream.write(b'0'); stream.flush(); stream.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream, fcntl.LOCK_EX)
+            try: yield
+            finally:
+                stream.seek(0)
+                if os.name == 'nt': msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else: fcntl.flock(stream, fcntl.LOCK_UN)
+
+    def metadata_path(self, fingerprint):
+        if not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint):
+            raise ValueError('音频指纹无效')
+        return self.root / (fingerprint + '.json')
+
+    def load(self, fingerprint):
+        path = self.metadata_path(fingerprint)
+        try: entry = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError): raise ValueError('本地音频缓存不存在或已过期') from None
+        if entry.get('fingerprint') != fingerprint: raise ValueError('音频缓存指纹不匹配')
+        entry['leases'] = {key: pid for key, pid in entry.get('leases', {}).items() if isinstance(pid, int) and process_alive(pid)}
+        return entry
+
+    def save(self, entry):
+        path = self.metadata_path(entry['fingerprint'])
+        temporary = path.with_suffix('.' + uuid.uuid4().hex + '.tmp')
+        temporary.write_text(json.dumps(entry), encoding='utf-8'); temporary.replace(path)
+
+    @staticmethod
+    def descriptor(entry):
+        return {key: entry[key] for key in ('fingerprint', 'videoId', 'duration', 'sampleRate')}
+
+    def add(self, source, video_id, duration, settings):
+        settings = local_settings(settings)
+        if not isinstance(video_id, str) or not re.fullmatch(r'\d+', video_id): raise ValueError('本地音频作品编号无效')
+        if not positive_number(duration) or duration > settings['maxDuration']: raise ValueError('本地音频超过时长限制')
+        size = source.stat().st_size
+        if size > settings['maxSourceBytes'] or size > settings['cacheBytes']: raise ValueError('本地音频超过文件或缓存大小限制')
+        source_hash = file_hash(source)
+        fingerprint = hashlib.sha256((video_id + ':' + source_hash).encode()).hexdigest()
+        with self.transaction():
+            output = self.root / (fingerprint + '.media')
+            self._cleanup(time.time(), max(0, settings['cacheBytes'] - (0 if output.exists() else size)))
+            retained = sum(path.stat().st_size for path in self.root.glob('*.media') if path != output)
+            if retained + size > settings['cacheBytes']:
+                raise ValueError('活动音频租约占满缓存，请稍后重试')
+            entry = {'fingerprint': fingerprint, 'videoId': video_id, 'sha256': source_hash, 'duration': duration, 'sampleRate': 16000, 'size': size, 'settings': settings, 'updated': time.time(), 'status': 'failed', 'leases': {}}
+            if output.exists():
+                if file_hash(output) != source_hash: raise ValueError('本地音频缓存校验失败')
+                try: entry['leases'] = self.load(fingerprint)['leases']
+                except ValueError: pass
+            else:
+                partial = output.with_suffix('.' + uuid.uuid4().hex + '.part')
+                try: shutil.copyfile(source, partial); partial.replace(output)
+                finally: partial.unlink(missing_ok=True)
+            entry['leases'][self.connection] = os.getpid()
+            self.save(entry)
+            self._cleanup(time.time(), settings['cacheBytes'])
+            return self.descriptor(entry)
+
+    def claim(self, fingerprint, video_id):
+        with self.transaction():
+            entry = self.load(fingerprint)
+            if entry['videoId'] != video_id: raise ValueError('本地音频作品编号不匹配')
+            self._verify(entry)
+            ttl = entry['settings']['successTtlHours' if entry['status'] == 'success' else 'failureTtlHours'] * 3600
+            if not entry['leases'] and time.time() - entry['updated'] > ttl: raise ValueError('本地音频缓存已过期')
+            entry['leases'][self.connection] = os.getpid(); self.save(entry)
+            return self.descriptor(entry)
+
+    def _verify(self, entry):
+        path = self.root / (entry['fingerprint'] + '.media')
+        if not path.is_file() or path.stat().st_size != entry['size'] or file_hash(path) != entry['sha256']:
+            raise ValueError('本地音频源文件校验失败')
+        return path
+
+    def lookup(self, fingerprint):
+        with self.transaction():
+            entry = self.load(fingerprint)
+            if self.connection not in entry['leases']: raise ValueError('当前连接尚未领取音频租约')
+            path = self.root / (fingerprint + '.media')
+            if not path.is_file() or path.stat().st_size != entry['size']: raise ValueError('本地音频源文件无效')
+            return path, entry
+
+    def pin_window(self, fingerprint):
+        with self.transaction():
+            entry = self.load(fingerprint)
+            if self.connection not in entry['leases']: raise ValueError('当前连接尚未领取音频租约')
+            token = self.connection + ':window:' + uuid.uuid4().hex
+            entry['leases'][token] = os.getpid(); self.save(entry)
+            return token
+
+    def unpin_window(self, fingerprint, token):
+        with self.transaction():
+            entry = self.load(fingerprint)
+            entry['leases'].pop(token, None); self.save(entry)
+            self._cleanup(time.time(), entry['settings']['cacheBytes'])
+
+    def finish(self, fingerprint, status):
+        if status not in ('success', 'failed', 'cancelled'): raise ValueError('本地转写终态无效')
+        with self.transaction():
+            entry = self.load(fingerprint)
+            if self.connection not in entry['leases']: raise ValueError('当前连接没有音频租约')
+            entry['leases'].pop(self.connection); entry['status'] = status; entry['updated'] = time.time()
+            self.save(entry); self._cleanup(time.time(), entry['settings']['cacheBytes'])
+        return {'finished': True, 'fingerprint': fingerprint, 'status': status}
+
+    def close(self):
+        if not self.root.exists(): return
+        with self.transaction():
+            for path in self.root.glob('*.json'):
+                try:
+                    entry = self.load(path.stem)
+                    if self.connection in entry['leases']:
+                        entry['leases'].pop(self.connection); entry['status'] = 'failed'; entry['updated'] = time.time(); self.save(entry)
+                except ValueError: pass
+
+    def cleanup(self, now=None, quota=1073741824):
+        with self.transaction(): self._cleanup(time.time() if now is None else now, quota)
+
+    def _cleanup(self, now, quota):
+        entries = []
+        for path in self.root.glob('*.json'):
+            try: entries.append(self.load(path.stem))
+            except ValueError: continue
+        total = sum(entry['size'] for entry in entries)
+        for entry in sorted(entries, key=lambda item: item['updated']):
+            ttl = entry['settings']['successTtlHours' if entry['status'] == 'success' else 'failureTtlHours'] * 3600
+            if not entry['leases'] and (now - entry['updated'] > ttl or total > quota):
+                (self.root / (entry['fingerprint'] + '.media')).unlink(missing_ok=True)
+                self.metadata_path(entry['fingerprint']).unlink(missing_ok=True)
+                total -= entry['size']
+
+
+def validate_pcm_window(start, duration, total):
+    if isinstance(start, bool) or not isinstance(start, (int, float)) or not math.isfinite(start) or start < 0 or start >= total or not positive_number(duration) or duration > 30:
+        raise ValueError('PCM 窗口须在音频内且不超过 30 秒')
+    return start, min(duration, total - start)
+
+
+def model_spec(model, revision, file):
+    spec = MODELS.get(model) if isinstance(model, str) else None
+    if not spec or spec['revision'] != revision or not isinstance(file, str) or file not in spec['files']:
+        raise ValueError('模型、固定版本或文件不在允许清单中')
+    return ROOT / 'runtime' / 'models' / 'transformers' / model / file, spec['files'][file]
+
+
+_MODEL_LOCK = threading.Lock()
+
+
+def ensure_model(model, revision, file, job, progress):
+    path, expected = model_spec(model, revision, file)
+    with _MODEL_LOCK:
+        job.check()
+        if path.is_file() and path.stat().st_size == expected['size'] and file_hash(path) == expected['sha256']:
+            return path, expected
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_suffix(path.suffix + '.' + uuid.uuid4().hex + '.part')
+        try:
+            url = 'https://huggingface.co/' + model + '/resolve/' + revision + '/' + file
+            progress('正在准备本地转写模型：' + model + '/' + file)
+            with urlopen(Request(url, headers={'User-Agent': 'VidSift-local-model'}), timeout=25) as response, partial.open('wb') as target:
+                if urlparse(response.geturl()).scheme != 'https': raise ValueError('模型下载必须使用 HTTPS')
+                size = 0; last = time.monotonic(); started = last
+                while block := response.read(CHUNK_SIZE):
+                    job.check()
+                    if time.monotonic() - started > 600: raise TimeoutError('本地模型下载超时')
+                    size += len(block)
+                    if size > expected['size']: raise ValueError('模型文件长度超出固定清单')
+                    target.write(block)
+                    if time.monotonic() - last > .5:
+                        progress(f'正在准备模型文件：{size * 100 // expected["size"]}%'); last = time.monotonic()
+            job.check()
+            if partial.stat().st_size != expected['size'] or file_hash(partial) != expected['sha256']: raise ValueError('模型文件完整性校验失败')
+            partial.replace(path)
+            return path, expected
+        finally: partial.unlink(missing_ok=True)
+
+
+MODELS = {'Xenova/whisper-base': {'revision': '64da57285918e20ea79ea5c88eed7197933abaa8',
+                         'files': {'config.json': {'size': 2248,
+                                                   'sha256': 'd1d347fdb422e6347c2f843a90d375aa67ea3f4b3e20d2c3075f9a9f6243685b'},
+                                   'generation_config.json': {'size': 3776,
+                                                              'sha256': '3bba359e33fdd6dc1c10f71846a477d339b0242f462f70ea1dd73274caa38d05'},
+                                   'preprocessor_config.json': {'size': 339,
+                                                                'sha256': 'a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d'},
+                                   'special_tokens_map.json': {'size': 2194,
+                                                               'sha256': 'e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691'},
+                                   'tokenizer.json': {'size': 2480466,
+                                                      'sha256': '27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566'},
+                                   'tokenizer_config.json': {'size': 282683,
+                                                             'sha256': '2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce'},
+                                   'onnx/decoder_model_merged_quantized.onnx': {'size': 53707539,
+                                                                                'sha256': 'a6beb6baabb66f00b6a686d828c95ffca6146d51900cbad0266cad38f64cf861'},
+                                   'onnx/encoder_model_quantized.onnx': {'size': 23200850,
+                                                                         'sha256': '3e345e977b55620a37c0c2b2af0644e019afdfad562dcf71eb929bb7274285f9'}}},
+ 'Xenova/whisper-small': {'revision': '2d67713f236afa48a18992566e7647f6ca848e13',
+                          'files': {'config.json': {'size': 2232,
+                                                    'sha256': '5a6429d21d7a3379dd0861b74510f9f7076f32b563bffc9fcb072482d55ab3be'},
+                                    'generation_config.json': {'size': 3837,
+                                                               'sha256': '0b7407a4e53a677f826e03c75d409e6f830663932bf43dda3b08c5efa2223279'},
+                                    'preprocessor_config.json': {'size': 339,
+                                                                 'sha256': 'a6a76d28c93edb273669eb9e0b0636a2bddbb1272c3261e47b7ca6dfdbac1b8d'},
+                                    'special_tokens_map.json': {'size': 2194,
+                                                                'sha256': 'e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691'},
+                                    'tokenizer.json': {'size': 2480466,
+                                                       'sha256': '27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566'},
+                                    'tokenizer_config.json': {'size': 282683,
+                                                              'sha256': '2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce'},
+                                    'onnx/decoder_model_merged_quantized.onnx': {'size': 156780950,
+                                                                                 'sha256': 'fcfc6100dc7339e7507e10f8b274350be7c4f8d8b575f0293f94cc0e156d6d24'},
+                                    'onnx/encoder_model_quantized.onnx': {'size': 92324809,
+                                                                          'sha256': '969f5ac12974340386bf7a02ea6626003e5e2dee396ffc6ab0eec282bf55ba06'}}}}
+
 class AssetStore:
     def __init__(self, root):
         self.root = Path(root).resolve()
@@ -453,6 +734,8 @@ class AssetStore:
                 entry = self.assets.pop(asset_id, None) if isinstance(asset_id, str) else None
                 if entry:
                     path = self.safe(entry[0])
+                    if path.parent == self.root / 'local-audio':
+                        continue  # Persistent cache is retained until lease-aware TTL/quota cleanup.
                     path.unlink(missing_ok=True)
                     if path.parent != self.root and not any(path.parent.iterdir()):
                         path.parent.rmdir()
@@ -478,7 +761,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.2.7', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.3.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
@@ -537,6 +820,7 @@ def validate_audio_duration(progress_output, expected):
 class Service:
     def __init__(self, root=None):
         self.store = AssetStore(root or ROOT / 'cache')
+        self.local_audio = LocalAudioCache(self.store.root, uuid.uuid4().hex)
 
     def ytdlp(self, url, task, job, args):
         command = [sys.executable, '-m', 'yt_dlp', '--no-playlist', '--no-warnings', '--socket-timeout', '25', '--retries', '1', '--no-progress', '--no-cache-dir']
@@ -667,6 +951,8 @@ class Service:
                     raise ValueError(f'抖音{label}仅返回部分内容')
                 length = response.headers.get('Content-Length')
                 total = int(length) if length is not None else None
+                if total is not None and total > getattr(job, 'max_source_bytes', math.inf):
+                    raise ValueError('本地音频超过源文件大小限制')
                 if total is not None and total <= 0:
                     raise ValueError(f'抖音{label}长度无效')
                 report(total)
@@ -679,6 +965,8 @@ class Service:
                             break
                         if downloaded == 0 and (len(block) < 12 or block[4:8] != b'ftyp'):
                             raise ValueError(f'抖音{label}内容不是有效 MP4，可能返回了网页')
+                        if downloaded + len(block) > getattr(job, 'max_source_bytes', math.inf):
+                            raise ValueError('本地音频超过源文件大小限制')
                         target.write(block)
                         downloaded += len(block)
                         if total is not None and downloaded > total:
@@ -742,7 +1030,7 @@ class Service:
                 retrying_douyin = True
         output = task / ('video.%(ext)s' if video else 'source.%(ext)s')
         selection = json.loads((task / 'audio-selection.json').read_text(encoding='utf-8')) if (task / 'audio-selection.json').exists() else {'selector': audio_format_selector(64)[0]}
-        args = ['-f', 'bv*[height<=720]+ba/b[height<=720]/b' if video else selection['selector'], '-o', str(output), '--print', 'after_move:filepath']
+        args = (['--max-filesize', str(int(job.max_source_bytes))] if hasattr(job, 'max_source_bytes') else []) + ['-f', 'bv*[height<=720]+ba/b[height<=720]/b' if video else selection['selector'], '-o', str(output), '--print', 'after_move:filepath']
         try:
             text, _ = self.ytdlp(url, task, job, args)
         except Cancelled:
@@ -841,6 +1129,12 @@ class Service:
         platform = validate_url(url)
         settings = Settings.parse(request.get('screenshots') or {})
         source = request.get('source') or {}
+        local = request.get('localTranscription') is True
+        local_config = local_settings(request.get('localSettings')) if local else None
+        local_descriptor = None
+        if local:
+            if platform != 'douyin': raise ValueError('本地转写目前仅用于抖音')
+            job.max_source_bytes = local_config['maxSourceBytes']
         task = self.store.new_task(job.id)
         try:
             self.cookies(request.get('cookies') or [], task, platform)
@@ -903,7 +1197,9 @@ class Service:
                     media_source['audioUrl'] = info['_douyin_audio_url']
                 (task / 'douyin-source.json').write_text(json.dumps(media_source), encoding='utf-8')
             result = {'subtitleStatus': 'available' if subtitle else info.get('_subtitle_status', 'unknown'), 'platform': platform, 'videoId': video_id, 'title': str(source.get('title') or info.get('title') or video_id), 'duration': duration, 'subtitle': subtitle, 'audio': None, 'images': [], 'frameInfo': {'mode': 'disabled', 'interval': settings.interval, 'frameCount': 0, 'collageCount': 0}, 'warnings': warnings}
-            need_audio = force or (request.get('needAudio') is True and not subtitle)
+            need_audio = local or force or (request.get('needAudio') is True and not subtitle)
+            if local and (duration > local_config['maxDuration'] or not video_id):
+                raise ValueError('本地转写作品编号无效或超过时长限制')
             if (settings.enabled or need_audio) and duration <= 0:
                 raise ValueError('无法确认视频时长，已停止下载；暂不支持直播或时长未知的视频')
             audio_settings = normalize_audio_settings(request.get('audioSettings'))
@@ -919,7 +1215,24 @@ class Service:
                     raise RuntimeError('未找到 FFmpeg，请运行 VidSift 安装程序')
                 progress('正在下载原视频' if settings.enabled else '正在下载完整音轨' if platform == 'douyin' and info.get('_douyin_audio_url') else '正在下载音频')
                 video = self.download(url, task, job, video=settings.enabled, progress=progress)
-            if need_audio:
+            if need_audio and local:
+                if video.stat().st_size > local_config['maxSourceBytes']:
+                    raise ValueError('本地音频超过源文件大小限制')
+                progress('正在核验本地原始音轨，不重新压缩音频')
+                _, probe = job.run([find_ffmpeg(), '-nostdin', '-hide_banner', '-i', str(video), '-map', '0:a:0', '-t', '0', '-f', 'null', '-'], timeout=30)
+                match = re.search(r'Duration: (\d+):(\d+):(\d+(?:\.\d+)?)', probe)
+                if not match: raise ValueError('无法核验本地音频实际时长')
+                actual_duration = int(match[1]) * 3600 + int(match[2]) * 60 + float(match[3])
+                if abs(actual_duration - duration) > max(2, duration * .01):
+                    raise ValueError('本地原始音轨时长与当前作品不一致')
+                local_descriptor = self.local_audio.add(video, video_id, actual_duration, local_config)
+                job.check()
+                cached, _ = self.local_audio.lookup(local_descriptor['fingerprint'])
+                result['localAudio'] = local_descriptor
+                result['audio'] = self.store.add(cached, 'audio/mp4')
+                choice = json.loads((task / 'audio-choice.json').read_text(encoding='utf-8')) if (task / 'audio-choice.json').exists() else {}
+                result['audioInfo'] = {**choice, 'originalBytes': video.stat().st_size, 'outputBytes': cached.stat().st_size, 'duration': actual_duration, 'settings': audio_settings, 'sourceSelection': selection_note, 'localTranscription': True, 'transcoded': False}
+            if need_audio and not local:
                 progress('正在整理包含人声的完整音轨')
                 output = task / 'audio.m4a'
                 original_bytes = video.stat().st_size
@@ -946,6 +1259,8 @@ class Service:
                 task.rmdir()
             return result
         except BaseException:
+            if local_descriptor:
+                self.local_audio.finish(local_descriptor['fingerprint'], 'cancelled' if job.event.is_set() else 'failed')
             self.store.cleanup(task)
             raise
 
@@ -971,6 +1286,7 @@ class Host:
         self.lock = threading.Lock()
         self.jobs = {}
         self.threads = []
+        self.verified_models = {}
 
     def emit(self, message):
         with self.lock:
@@ -979,10 +1295,44 @@ class Host:
     def worker(self, request, job):
         result = None
         try:
-            result = self.service.resolve(request, job, lambda text: self.emit({'id': job.id, 'type': 'progress', 'text': text}))
+            job.check()
+            progress = lambda text: self.emit({'id': job.id, 'type': 'progress', 'text': text})
+            action = request.get('action')
+            if action == 'resolve':
+                result = self.service.resolve(request, job, progress)
+            elif action == 'prepare_local_audio':
+                result = self.service.local_audio.claim(request.get('fingerprint'), request.get('videoId'))
+                job.check()
+            elif action == 'local_audio_finish':
+                result = self.service.local_audio.finish(request.get('fingerprint'), request.get('status'))
+            elif action == 'read_pcm_window':
+                result = self.pcm_window(request, job)
+            elif action == 'model_file_info':
+                _, result = ensure_model(request.get('model'), request.get('revision'), request.get('file'), job, progress)
+            elif action == 'model_file_chunk':
+                path, expected = model_spec(request.get('model'), request.get('revision'), request.get('file'))
+                offset, length = request.get('offset'), request.get('length')
+                if type(offset) is not int or type(length) is not int or not 0 <= offset < expected['size'] or not 0 < length <= CHUNK_SIZE or offset + length > expected['size']:
+                    raise ValueError('模型文件读取范围无效')
+                # Info must verify the entire pinned file before chunk streaming.
+                signature = (path.stat().st_mtime_ns, path.stat().st_size) if path.is_file() else None
+                if self.verified_models.get(str(path)) != signature or signature is None:
+                    raise ValueError('请先核验模型文件信息')
+                with path.open('rb') as stream:
+                    stream.seek(offset); block = stream.read(length)
+                if len(block) != length: raise ValueError('模型文件分片不完整')
+                result = {'base64': base64.b64encode(block).decode('ascii'), 'size': len(block), 'totalSize': expected['size'], 'offset': offset}
+            if action == 'model_file_info':
+                path, _ = model_spec(request.get('model'), request.get('revision'), request.get('file'))
+                self.verified_models[str(path)] = (path.stat().st_mtime_ns, path.stat().st_size)
+            job.check()
             self.emit({'id': job.id, 'type': 'result', 'result': result})
         except Exception as error:
-            if result:
+            if result and request.get('action') == 'prepare_local_audio':
+                self.service.local_audio.finish(result['fingerprint'], 'cancelled' if job.event.is_set() else 'failed')
+            if result and request.get('action') == 'resolve':
+                if result.get('localAudio'):
+                    self.service.local_audio.finish(result['localAudio']['fingerprint'], 'cancelled' if job.event.is_set() else 'failed')
                 assets = result.get('images', []) + ([result['audio']] if result.get('audio') else [])
                 self.service.store.release([asset['assetId'] for asset in assets])
             safe = str(error) if isinstance(error, (ValueError, Cancelled, TimeoutError, MediaFailure)) else '媒体处理失败，请检查登录状态、网络、平台支持情况和 FFmpeg 安装。'
@@ -991,6 +1341,37 @@ class Host:
             with self.lock:
                 self.jobs.pop(job.id, None)
 
+    def pcm_window(self, request, job):
+        cache = self.service.local_audio
+        if not cache.window_lock.acquire(blocking=False):
+            raise ValueError('已有 PCM 窗口正在读取，请串行读取')
+        temporary = None
+        pin = None
+        try:
+            pin = cache.pin_window(request.get('fingerprint'))
+            path, entry = cache.lookup(request.get('fingerprint'))
+            start, duration = validate_pcm_window(request.get('start'), request.get('duration'), entry['duration'])
+            ffmpeg = find_ffmpeg()
+            if not ffmpeg: raise ValueError('未找到 FFmpeg')
+            temporary = cache.root / (uuid.uuid4().hex + '.pcm')
+            job.run([ffmpeg, '-nostdin', '-hide_banner', '-loglevel', 'error', '-ss', str(start), '-i', str(path), '-t', str(duration), '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_f32le', '-f', 'f32le', '-y', str(temporary)], timeout=90)
+            # Resampling/codec rounding may omit a few samples. Explicitly pad
+            # at most the previously accepted 100 ms; larger truncation fails.
+            size, padding_samples = finalize_pcm_window(temporary, duration)
+            with temporary.open('rb') as stream:
+                sequence = 0
+                while block := stream.read(CHUNK_SIZE):
+                    job.check()
+                    self.emit({'id': job.id, 'type': 'chunk', 'sequence': sequence, 'data': base64.b64encode(block).decode('ascii')})
+                    sequence += 1
+            return {'fingerprint': entry['fingerprint'], 'start': start, 'duration': size / 64000, 'sampleRate': 16000, 'samples': size // 4, 'paddingSamples': padding_samples, 'size': size, 'encoding': 'f32le'}
+        finally:
+            if temporary: temporary.unlink(missing_ok=True)
+            try:
+                if pin: cache.unpin_window(request.get('fingerprint'), pin)
+            finally:
+                cache.window_lock.release()
+
     def dispatch(self, request):
         task_id = request.get('id')
         if not isinstance(task_id, (str, int)) or isinstance(task_id, bool):
@@ -998,7 +1379,7 @@ class Host:
         action = request.get('action')
         if action in ('diagnostics', 'ping'):
             self.emit({'id': task_id, 'type': 'result', 'result': diagnostics()})
-        elif action == 'resolve':
+        elif action in ('resolve', 'prepare_local_audio', 'local_audio_finish', 'read_pcm_window', 'model_file_info', 'model_file_chunk'):
             with self.lock:
                 if task_id in self.jobs or len(self.jobs) >= 2:
                     raise ValueError('任务编号已在使用，或本地任务数量已达上限')
@@ -1042,7 +1423,9 @@ class Host:
                 job.cancel()
             for thread in self.threads:
                 thread.join(timeout=30)
+            self.service.local_audio.close()
             for task in list(self.service.store.root.iterdir()):
+                if task == self.service.local_audio.root: continue
                 # Only task directories created in this process are eligible.
                 if any(path.is_relative_to(task) for path, _ in self.service.store.assets.values()):
                     self.service.store.cleanup(task)

@@ -14,7 +14,7 @@
    const task={tabId,source,id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,cancelled:false,controller:new AbortController()};
    this.tasks.set(tabId,task);d.lock(tabId,'video','正在提取视频内容...');
    const log=(stage,value)=>{try{d.diagnostic?.(task,stage,value);}catch{}};log('task.started');
-   const status=(type,text)=>{d.lock(tabId,'video',text);notify(type,text);};let assets=[];
+   const status=(type,text)=>{d.lock(tabId,'video',text);notify(type,text);};let assets=[],localAudio,localOutcome='failed';
    try{
     await this.assertLive(task);log('source.checked');task.client=d.client();log('native.connected');
     if(typeof task.client.request==='function'){try{const reply=await task.client.request('diagnostics');log('native.version',{nativeVersion:reply.result?.version||'unknown'});}catch{log('native.diagnostics_failed');}}
@@ -25,8 +25,15 @@
      await this.assertLive(task);
      if(!pageSource)status('STATUS','当前页面未提供完整原视频地址，改用限时解析...');
     }
-    log('native.resolve');
-    const result=await task.client.resolve({url:msg.sourceUrl,source:{...msg.source,...pageSource},forceAudio:!!msg.forceAudio,needAudio:true,audioSettings:d.normalizeAudio?d.normalizeAudio(msg.audioSettings):msg.audioSettings,screenshots:d.normalize(msg.screenshotSettings)},text=>{log('native.progress',{phase:/YouTube 字幕/.test(text)?'youtube_subtitle':/元数据/.test(text)?'metadata':/字幕轨道/.test(text)?'subtitle_tracks':/下载/.test(text)?'download':/压缩|编码/.test(text)?'encode':'processing'});status('STATUS',text);});
+    const local=source.platform==='douyin'&&msg.transcribeService==='local';
+    let result;
+    if(local&&!d.normalize(msg.screenshotSettings).enabled&&d.loadLocalMedia){result=await d.loadLocalMedia(task,pageSource);await this.assertLive(task);if(result){log('local.media_reused');status('STATUS','已核验并复用本作品的完整音频，不重新下载');}}
+    if(!result){
+     log('native.resolve');
+     result=await task.client.resolve({url:msg.sourceUrl,source:{...msg.source,...pageSource},forceAudio:!!msg.forceAudio,needAudio:true,localTranscription:local,localSettings:msg.localSettings,audioSettings:d.normalizeAudio?d.normalizeAudio(msg.audioSettings):msg.audioSettings,screenshots:d.normalize(msg.screenshotSettings)},text=>{log('native.progress',{phase:/YouTube 字幕/.test(text)?'youtube_subtitle':/元数据/.test(text)?'metadata':/字幕轨道/.test(text)?'subtitle_tracks':/下载/.test(text)?'download':/压缩|编码/.test(text)?'encode':'processing'});status('STATUS',text);});
+     if(local&&result.localAudio)await d.saveLocalMedia?.(task,result,msg.localSettings);
+    }
+    localAudio=result.localAudio;
     log('native.completed',{hasSubtitle:!!result.subtitle?.body?.length,subtitleCount:result.subtitle?.body?.length||0,hasAudio:!!result.audio,duration:result.duration,imageCount:result.images?.length||0,
      subtitleStatus:result.subtitleStatus,originalBytes:result.audioInfo?.originalBytes,outputBytes:result.audioInfo?.outputBytes,
      audioCandidateCount:result.audioInfo?.candidateCount,selectedSourceBytes:result.audioInfo?.selectedSourceBytes,
@@ -40,19 +47,26 @@
     const attachments=[];
     for(const image of result.images||[]){await this.assertLive(task);attachments.push(await task.client.readAsset(image.assetId));}
     let srt=msg.forceAudio?'':result.subtitle?.body?.length?d.toSrt(result.subtitle.body):'';
-    const common={...msg,taskId:task.id,biliTabId:tabId,videoTitle:context.title,bvid:context.videoId,source:context,task};
+    const common={...msg,taskId:task.id,biliTabId:tabId,videoTitle:context.title,bvid:context.videoId,source:context,localAudio,task};
     if(!srt){
-     if(!result.audio)throw new Error('未取得可用字幕或完整音频，请检查视频访问权限');
-     status('STATUS','正在读取视频音频...');const audio=await task.client.readAsset(result.audio.assetId);await this.assertLive(task);
-     if((msg.transcribeService||'aistudio')==='aistudio'){
+     if(!result.audio&&!localAudio)throw new Error('未取得可用字幕或完整音频，请检查视频访问权限');
+     if(source.platform==='douyin'&&msg.transcribeService==='local'){
+      if(!localAudio||typeof task.client.readPcmWindow!=='function')throw new Error('本机媒体程序不支持分段本地转写，请更新本包本机程序');
+      log('local.start',{duration:result.duration});
+      srt=await d.transcribe(null,common,status,task.controller.signal);
+      if(!srt?.trim())throw new Error('本地转写没有取得有效口播文字，未发送到 ChatGPT');
+     }else{
+      status('STATUS','正在读取视频音频...');const audio=await task.client.readAsset(result.audio.assetId);await this.assertLive(task);
+      if((msg.transcribeService||'aistudio')==='aistudio'){
       log('aistudio.start');
       status('STATUS','正在后台转写音频，完成后自动交给 ChatGPT...');
       const transcription=await d.sendAIStudio({...common,audio,duration:result.duration,attachments:[audio,...attachments]});
       srt=transcription?.transcript;
       if(!srt?.trim())throw new Error('AI Studio 未返回完整逐字稿，未发送到 ChatGPT');
-     }else{
-      srt=await d.transcribe(audio,common,status,task.controller.signal);
-      if(!srt?.trim())throw new Error('音频转写结果为空，未发送到 ChatGPT');
+      }else{
+       srt=await d.transcribe(audio,common,status,task.controller.signal);
+       if(!srt?.trim())throw new Error('音频转写结果为空，未发送到 ChatGPT');
+      }
      }
     }
     if(srt){
@@ -63,9 +77,11 @@
      await d.sendChatGPT({...common,file,attachments:[{name,mime:'text/plain',content:srt},...attachments]});
     }
     if(task.cancelled)throw new Error('视频处理已取消');
-    log('task.completed');status('DONE','字幕/音频与所选图片已上传并发送。');return {ok:true,source:context,frameInfo:result.frameInfo};
+    localOutcome='success';log('task.completed');status('DONE','总结请求已发送给 ChatGPT。');return {ok:true,source:context,frameInfo:result.frameInfo};
    }catch(e){log('task.failed',{category:root.VidSiftDiagnostics?.category(e)||'operation_failed',errorName:e.name});status('ERROR',e.message);throw e;}
    finally{
+    if(localAudio)try{await task.client?.finishLocalAudio?.(localAudio,task.cancelled?'cancelled':localOutcome);}catch{}
+    if(localAudio)try{await d.finishLocalMedia?.(task,task.cancelled?'cancelled':localOutcome);}catch{}
     try{await task.client?.release(assets);}catch{}task.client?.close();
     this.tasks.delete(tabId);d.unlock(tabId);
    }

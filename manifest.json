@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "知行视频总结",
-  "version": "5.2.7",
+  "version": "5.3.0",
   "description": "提取 B站、YouTube、抖音字幕或音频，可选图片拼图，发送到 ChatGPT / AI Studio",
   "background": {
     "service_worker": "background.js"
@@ -153,5 +153,11 @@
     "48": "icons/a3-v1-48.png",
     "128": "icons/a3-v1-128.png"
   },
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAj7LZMxtUswSw6DF1B2pTqB4K4C0UM+GH/kb9vp8Xn44PqFfeIVjSnMu9pDIJc3PQspBWxhKMqxQfuvmV0pRfQ4+cZqWABV8uP1yABIGUqoEloWjXYou2++BUqnjYzAMnV3i1LXBHTcSQJWRWNVyngNdy2og4ULVFOk+J0HH+zoDRaIMjdvWAyx1RuinkNEDwH8yIAR+xcOv5pB3sGJ//nIdhxFwlW8fp2KE2Jjz+FsvzYqq0CK7oJZedceO6wqd4G/dj5s7ucKTPrtJSUztDrg94VYO7CVz+j8Xu/8StWTeLvZOxXbfSQQH8axlpWCILsvsqiv03hyv6pRHFF+2WVQIDAQAB"
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAj7LZMxtUswSw6DF1B2pTqB4K4C0UM+GH/kb9vp8Xn44PqFfeIVjSnMu9pDIJc3PQspBWxhKMqxQfuvmV0pRfQ4+cZqWABV8uP1yABIGUqoEloWjXYou2++BUqnjYzAMnV3i1LXBHTcSQJWRWNVyngNdy2og4ULVFOk+J0HH+zoDRaIMjdvWAyx1RuinkNEDwH8yIAR+xcOv5pB3sGJ//nIdhxFwlW8fp2KE2Jjz+FsvzYqq0CK7oJZedceO6wqd4G/dj5s7ucKTPrtJSUztDrg94VYO7CVz+j8Xu/8StWTeLvZOxXbfSQQH8axlpWCILsvsqiv03hyv6pRHFF+2WVQIDAQAB",
+  "cross_origin_embedder_policy": {
+    "value": "require-corp"
+  },
+  "cross_origin_opener_policy": {
+    "value": "same-origin"
+  }
 }

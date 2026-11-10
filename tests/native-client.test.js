@@ -16,3 +16,23 @@ test('out of order chunks and disconnect reject pending requests',async()=>{
  await assert.rejects(pending,/顺序/);
  const other=c.request('resolve',{url:'x'});r.p.onDisconnect.emit();await assert.rejects(other,/本机/);
 });
+test('PCM windows preserve metadata and reject invalid bounds before protocol request',async()=>{
+ const r=runtime(),c=new NativeMediaClient(r);
+ await assert.rejects(c.readPcmWindow('f',0,31),/30/);assert.equal(r.p.last,undefined);
+ const pending=c.readPcmWindow('f',1,2);const id=r.p.last.id;
+ r.p.onMessage.emit({id,type:'chunk',sequence:0,data:'AAAAAA=='});
+ r.p.onMessage.emit({id,type:'result',result:{fingerprint:'f',start:1,duration:1/16000,sampleRate:16000,samples:1,size:4,encoding:'f32le'}});
+ assert.equal((await pending).base64,'AAAAAA==');c.close();
+});
+test('PCM rejects oversized protocol chunks before accumulation',async()=>{
+ const r=runtime(),c=new NativeMediaClient(r),pending=c.readPcmWindow('f',0,30);
+ r.p.onMessage.emit({id:r.p.last.id,type:'chunk',sequence:0,data:'A'.repeat(349529)});
+ await assert.rejects(pending,/上限/);c.close();
+});
+test('local cache reclaim and finish send fingerprint with explicit terminal status',async()=>{
+ const r=runtime(),c=new NativeMediaClient(r),descriptor={fingerprint:'hash',videoId:'123'};
+ let p=c.prepareLocalAudio(descriptor);assert.equal(r.p.last.action,'prepare_local_audio');assert.equal(r.p.last.videoId,'123');
+ r.p.onMessage.emit({id:r.p.last.id,type:'result',result:descriptor});await p;
+ p=c.finishLocalAudio(descriptor,'cancelled');assert.equal(r.p.last.status,'cancelled');
+ r.p.onMessage.emit({id:r.p.last.id,type:'result',result:{finished:true}});await p;c.close();
+});

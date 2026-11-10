@@ -1,5 +1,5 @@
 'use strict';
-importScripts('task-diagnostics.js','audio-settings.js','attachment-transfer.js','platforms.js','native-client.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js');
+importScripts('task-diagnostics.js','audio-settings.js','douyin-local-settings.js','local-transcription.js','local-media-cache.js','attachment-transfer.js','platforms.js','native-client.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js');
 
 const _diagnostics=VidSiftDiagnostics.create(chrome.storage?.local,{version:chrome.runtime.getManifest?.().version||'unknown'});
 function diagnoseTask(task,stage,details={}){try{if(stage==='task.started')_diagnostics.begin(task.id,{sourceTabId:task.tabId,platform:task.source.platform,videoId:task.source.videoId},task.diagnosticId);return _diagnostics.record(task.id,stage,details);}catch{return Promise.resolve(false);}}

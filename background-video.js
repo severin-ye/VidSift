@@ -56,7 +56,13 @@ async function sendVideoAIStudio(data){
   return await completed;
  }catch(e){_targetCompletions.get(data.task.id)?.reject(e);await completed.catch(()=>{});throw e;}
 }
+let _localTranscription;
+let _localMediaCache;
 async function transcribeVideo(audio,data,notify,signal){
+ if(data.localAudio){
+  _localTranscription||=new LocalTranscription({runtime:chrome.runtime,storage:chrome.storage.local,ensureOffscreen:ensureOffscreenDocument});
+  return _localTranscription.start({taskId:data.task.id,descriptor:data.localAudio,client:data.task.client,model:data.model,device:data.device,settings:data.localSettings,signal,onProgress:text=>{diagnoseTask(data.task,'local.progress',{phase:'transcription'});notify('STATUS',text);}});
+ }
  if(data.transcribeService==='local'){
   if(!data.model||!data.device)throw new Error('本地转写模型或设备未设置，请在设置页完成配置');
   await ensureOffscreenDocument();const requestId=data.task.id;_localProgressMap.set(requestId,notify);
@@ -79,6 +85,9 @@ async function transcribeVideo(audio,data,notify,signal){
  return VidSiftPlatforms.readTranscription(response,notify);
 }
 const _videoWorkflow=new VideoWorkflow({
+ loadLocalMedia:(task,pageSource)=>(_localMediaCache??=new LocalMediaCache(chrome.storage.local)).load(task,pageSource),
+ saveLocalMedia:(task,result,settings)=>(_localMediaCache??=new LocalMediaCache(chrome.storage.local)).save(task,result,settings),
+ finishLocalMedia:(task,status)=>(_localMediaCache??=new LocalMediaCache(chrome.storage.local)).finish(task,status),
  diagnostic:diagnoseTask,
  identify:VidSiftPlatforms.identify,toSrt:VidSiftPlatforms.toSrt,normalize:ScreenshotSettings.normalize,normalizeAudio:AudioSettings.normalize,
  getTab:id=>chrome.tabs.get(id),client:()=>new NativeMediaClient(),existing:_getActiveTranscribeTask,
@@ -101,7 +110,16 @@ chrome.runtime.onConnect.addListener(port=>{
  port.onMessage.addListener(msg=>{
   if(msg.type!=='START_VIDEO_TASK')return;
   const notify=(type,text)=>{overlayMsg(msg.openerTabId,{type:type==='ERROR'?'EXT_ERROR':'EXT_STATUS',text});if(connected)try{port.postMessage({type,text});}catch{}};
-  _videoWorkflow.start(msg,notify).catch(()=>{});
+  (async()=>{
+   const platform=VidSiftPlatforms.identify(msg.sourceUrl)?.platform;
+   if(platform==='douyin'){
+    const stored=await chrome.storage.local.get(['transcribeService','localModel','localDevice','douyinTranscribeService','douyinLocalSettings']);
+    const selected=DouyinLocalSettings.resolve(platform,stored);
+    Object.assign(msg,{transcribeService:selected.service,model:selected.model,device:selected.device,localSettings:selected.settings});
+    if(stored.douyinTranscribeService===undefined)await chrome.storage.local.set({douyinTranscribeService:'local'});
+   }
+   await _videoWorkflow.start(msg,notify);
+  })().catch(e=>notify('ERROR',e.message));
  });
 });
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
