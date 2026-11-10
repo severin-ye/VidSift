@@ -297,14 +297,21 @@ npm run package
 | `tests/` | 扩展逻辑、本机程序和浏览器流程测试。 |
 | `scripts/` | 版本同步、资源检查与打包脚本。 |
 
-### 自动发版（维护者）
+### 一条命令发版（维护者）
 
-- 推送与 `package.json.version` 一致的 `vX.Y.Z` 标签后，GitHub Actions 会自动检查、打包、上传并下载校验 ZIP，成功后才清理更旧的扩展 ZIP。
-- 在 GitHub 发布版本也会触发同一流程，发布任务按仓库串行执行，重复触发会复用已校验的相同文件。
+```powershell
+npm run release
+```
+
+- 在已经提交改动的 `main` 分支运行，版本以 `package.json` 为准；首次使用需要 GitHub CLI 已登录（`gh auth login`），或提供当前进程的 `GITHUB_TOKEN`。
+- 脚本自动检查源码状态和版本标签、运行检查、生成并验证可重复 ZIP、推送当前代码和版本标签、上传 ZIP 与校验文件，再下载校验，成功后才删除更旧的安装 ZIP。
+- 全部步骤在本地由脚本串联完成，不需要 Agent 逐项打包、上传或删除，也不依赖 GitHub Actions 的计费状态。
+- 已存在的版本标签必须仍指向当前提交；脚本不会覆盖标签或强推，发布新改动前应正常增加版本并提交。
+- 上传或校验失败时保留旧包，修复原因后重复运行同一命令即可继续，已验证的相同文件不会重复上传。
 - 旧版只移除匹配 `VidSift-版本号-standalone.zip` 的安装包及其校验文件，保留标签、历史发布说明、其他附件和 GitHub 自动源码归档。
-- 上传或校验失败时保留旧包；可在 [Actions](https://github.com/severin-ye/VidSift/actions/workflows/release.yml) 重跑失败任务，或选择“Run workflow”并填写已有版本标签，无需 Agent 手工打包、上传或删除附件。
-- 下载入口始终指向包含测试版的[最新版发布列表](https://github.com/severin-ye/VidSift/releases)，今后不需要手改 README 中的版本下载链接。
-- 自动创建的版本默认标为测试版，脚本不会把既有版本强行改为稳定版。
+- 下载入口始终指向包含测试版的[最新版发布列表](https://github.com/severin-ye/VidSift/releases)，不需要手改 README 的版本下载链接。
+- 如只想查看计划，可运行 `npm run release -- -DryRun`，该模式不会打包、推送或修改发布资产。
+- 自动创建的版本默认标为测试版；本地脚本不会把既有版本强行改为稳定版。
 
 ## 开源协议与致谢
 
