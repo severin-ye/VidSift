@@ -1,0 +1,136 @@
+{
+  "manifest_version": 3,
+  "name": "通用总结扩展",
+  "version": "5.1.1",
+  "description": "提取 B站、YouTube、抖音字幕或音频，可选图片拼图，发送到 ChatGPT / AI Studio",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "offscreen",
+    "nativeMessaging",
+    "scripting"
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://api.bilibili.com/*",
+    "https://aisubtitle.hdslb.com/*",
+    "https://aistudio.google.com/*",
+    "https://*.bilivideo.com/*",
+    "https://*.bilivideo.cn/*",
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://youtu.be/*",
+    "https://www.douyin.com/*",
+    "https://v.douyin.com/*",
+    "https://www.bilibili.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/list/*"
+      ],
+      "js": [
+        "bilibili-content-main.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/list/*"
+      ],
+      "js": [
+        "bilibili-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "attachment-utils.js",
+        "chatgpt-content.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://aistudio.google.com/*"
+      ],
+      "js": [
+        "attachment-utils.js",
+        "aistudio-transcript.js",
+        "attachment-transfer.js",
+        "aistudio-content.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://www.douyin.com/*"
+      ],
+      "js": [
+        "platforms.js",
+        "platform-content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "prompt_chatgpt.txt",
+        "prompt_aistudio.txt"
+      ],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*",
+        "https://aistudio.google.com/*"
+      ]
+    },
+    {
+      "resources": [
+        "lib/transformers-3.8.1.min.js",
+        "lib/ort-wasm-simd-threaded-3.8.1.jsep.mjs"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAj7LZMxtUswSw6DF1B2pTqB4K4C0UM+GH/kb9vp8Xn44PqFfeIVjSnMu9pDIJc3PQspBWxhKMqxQfuvmV0pRfQ4+cZqWABV8uP1yABIGUqoEloWjXYou2++BUqnjYzAMnV3i1LXBHTcSQJWRWNVyngNdy2og4ULVFOk+J0HH+zoDRaIMjdvWAyx1RuinkNEDwH8yIAR+xcOv5pB3sGJ//nIdhxFwlW8fp2KE2Jjz+FsvzYqq0CK7oJZedceO6wqd4G/dj5s7ucKTPrtJSUztDrg94VYO7CVz+j8Xu/8StWTeLvZOxXbfSQQH8axlpWCILsvsqiv03hyv6pRHFF+2WVQIDAQAB"
+}

@@ -1,0 +1,219 @@
+# Bilibili Subtitle to AI
+
+一个 Chrome 浏览器扩展，自动提取 Bilibili 视频的 AI 字幕或音频，发送到 ChatGPT / Google AI Studio 进行结构化总结。
+
+## 功能
+
+- **自动提取字幕** — 通过 Bilibili API 获取视频的 AI 生成中文字幕，转换为 SRT 格式
+- **音频转写（自建服务）** — 无字幕时可调用自建转写服务，将音频转为 SRT 字幕后发送到 ChatGPT
+- **音频回退（AI Studio）** — 无字幕时也可回退为提取音频流，发送到 Google AI Studio 分析
+- **多 AI 服务支持** — 支持 ChatGPT（字幕）和 Google AI Studio（音频）
+- **音频转写服务来源选择** — 可在设置页选择使用自建服务或 AI Studio
+- **临时对话** — 支持以临时对话模式打开，保护隐私
+- **自定义提示词** — 可在设置页自定义分析提示词，也可一键恢复默认
+- **多分P支持** — 正确识别多分P视频的当前分P并提取对应字幕
+- **字幕预检测** — 打开弹窗时即预检字幕可用性，显示字幕语言
+
+## 安装
+
+1. 打开 Chrome，访问 `chrome://extensions/`
+2. 开启右上角「开发者模式」
+3. 点击「加载已解压的扩展程序」，选择本项目目录
+
+## 使用方法
+
+1. 在 Bilibili 打开一个视频页面
+2. 点击浏览器工具栏中的扩展图标
+3. 弹窗会自动检测字幕可用性并显示状态
+4. 按需勾选「临时对话」
+5. 点击按钮
+   - 有中文字幕时：提取字幕 → 转换 SRT → 上传至 ChatGPT 并发送分析请求
+   - 无字幕且选择自建服务时：调用自建转写服务 → 获取 SRT → 上传至 ChatGPT
+   - 无字幕且选择 AI Studio 时：提取音频 → 上传至 Google AI Studio 并发送分析请求
+
+## 超时与重试策略
+
+以下时间目前固定在代码中，不能通过设置页修改。达到超时后，扩展会显示错误并停止当前自动流程，除非表格中另有说明。
+
+| 流程 | 固定时间 | 达到边界后的行为 |
+|------|----------|------------------|
+| 新标签页加载 | 2 分钟 | 报告页面加载超时 |
+| ChatGPT 编辑器就绪 | 10 分钟 | 报告无法连接 ChatGPT |
+| ChatGPT 新文件块未出现的确认窗口 | 发送按钮保持可用后 5 秒 | 视为明确上传失败，最多自动重试 1 次 |
+| ChatGPT 文件上传 | 30 秒为慢上传提示；最长等待 5 分钟 | 30 秒后继续等待原上传，不会重复上传；5 分钟后停止等待且不自动重试 |
+| ChatGPT 发送按钮就绪 | 30 秒 | 不发送消息并报告超时 |
+| ChatGPT 新会话 ID 出现 | 30 秒 | 跳过自动改名并报告超时，不影响已发送的消息 |
+| AI Studio 页面就绪 | 30 秒 | 报告页面加载超时 |
+| AI Studio 音频附件出现 | 1 分钟 | 停止自动流程并报告上传失败 |
+| AI Studio Run 按钮就绪 | 30 秒 | 不执行并报告按钮不可用 |
+
+ChatGPT 字幕上传只会在页面明确显示失败（文件块消失或未出现）时自动重试。上传仍在进行时不会启动第二次上传，因为内容脚本无法安全取消已经交给 ChatGPT 的原上传请求。
+
+自建服务请求、本地 Whisper 推理、模型/WASM 下载以及 ChatGPT 自动标题生成目前没有总超时，会一直等待成功、明确失败、页面断开或用户关闭相关页面。Go 自建转写服务在运行期间每 10 秒发送一次 SSE 心跳，以避免长时间转写被误认为无响应；Python 版发送排队和转写进度事件，没有独立的定时心跳。
+
+## 项目结构
+
+```
+bilibili-subtitle-to-ai/
+├── manifest.json           # 扩展清单 (Manifest V3)
+├── popup.html              # 弹出窗口 UI
+├── popup.css               # 样式
+├── popup.js                # 主逻辑：URL 解析、字幕获取、SRT 转换、音频提取
+├── background.js           # Service Worker：任务调度、自建服务代理
+├── bilibili-content.js     # B站内容脚本（隔离世界）：SSE 接收、状态浮层
+├── bilibili-content-main.js# B站内容脚本（主世界）：音频下载
+├── chatgpt-content.js      # 内容脚本：在 ChatGPT 页面注入字幕文件并发送
+├── aistudio-content.js     # 内容脚本：在 AI Studio 页面注入音频文件并发送
+├── options.html            # 设置页面：自定义提示词、自建服务配置
+├── options.js              # 设置页面逻辑
+├── prompt_chatgpt.txt      # ChatGPT使用的默认提示词（结构化总结指令）
+├── prompt_aistudio.txt     # AI Studio使用的默认提示词（结构化总结指令）
+├── server/                 # 自建音频转字幕服务（Go / Python 二选一）
+│   ├── main.go             # Go 服务主程序
+│   ├── whisper_server.pyw  # Python 服务（Windows 托盘 / CUDA）
+│   ├── go.mod
+│   └── config.example.toml # 配置文件示例
+├── PRIVACY_POLICY.md       # 隐私政策
+└── icons/                  # 扩展图标
+```
+
+## 自建音频转字幕服务
+
+扩展支持对接自建的音频转字幕 HTTP 服务，在无 AI 字幕时将音频转为 SRT 后发送到 ChatGPT。
+
+提供 Go 和 Python 两种实现，选择一种部署即可。Go 版调用外部转写程序；Python 版直接使用 faster-whisper，带 Windows 托盘、任务排队、转写进度和空闲释放显存功能。
+
+### Python 版（Windows + NVIDIA GPU）
+
+脚本：[server/whisper_server.pyw](server/whisper_server.pyw)。仓库版本已移除个人 Token，通过环境变量配置。
+
+**推荐模型**：[CWTchen/Belle-whisper-large-v3-zh-punct-ct2-float32](https://huggingface.co/CWTchen/Belle-whisper-large-v3-zh-punct-ct2-float32)。这是 Python 版默认使用的模型，项目作者实际使用下来中文转写效果非常好，推荐用于 B 站中文视频。它针对中文语音识别和标点预测进行了优化，采用可由 faster-whisper 直接加载的 CTranslate2 格式。模型文件为 float32，脚本在 CUDA 上使用 `float16` 推理。
+
+环境要求：Windows、Python 3.9+、支持 CUDA 的 NVIDIA GPU，并安装与 CTranslate2 兼容的 CUDA/cuDNN 运行库。当前依赖要求参见 [faster-whisper GPU 安装说明](https://github.com/SYSTRAN/faster-whisper#gpu)（CUDA 12 的 cuBLAS 和 cuDNN 9）。
+
+在项目根目录打开 PowerShell，创建虚拟环境并安装依赖：
+
+```powershell
+py -m venv server/.venv
+./server/.venv/Scripts/python.exe -m pip install flask faster-whisper requests pystray pillow waitress
+
+# 生成本次部署的 Token，填入扩展设置；请自行保存，以便下次启动时复用
+$env:WHISPER_TOKEN = (& ./server/.venv/Scripts/python.exe -c "import secrets; print(secrets.token_urlsafe(32))")
+$env:WHISPER_TOKEN
+./server/.venv/Scripts/pythonw.exe ./server/whisper_server.pyw
+```
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `WHISPER_TOKEN` | 无，必填 | Bearer Token；未设置时拒绝启动 |
+| `WHISPER_ADDR` | `127.0.0.1:8088` | HTTP 监听地址 |
+| `WHISPER_MODEL` | 上述推荐模型的完整仓库 ID | 可改为其他兼容模型 ID 或本地模型目录 |
+
+上述环境变量只在当前 PowerShell 会话及其启动的进程中生效。下次启动前需重新设置相同 Token；如需双击 `.pyw` 启动，请先配置 Windows 用户环境变量，并确保关联的 Python 已安装依赖。脚本也支持放在虚拟环境根目录下，自动使用同目录的 `Scripts/pythonw.exe`。
+
+首次启动会下载并加载模型，完成后才开始监听 HTTP 请求；可以通过 `http://127.0.0.1:8088/health` 检查服务。日志写入脚本同目录的 `whisper_server.log`。托盘菜单支持查看状态、卸载模型和退出，双击托盘图标可打开日志窗口；可在脚本同目录放置自定义 `tray.ico`，未提供时使用默认纯色图标。模型空闲超过 5 分钟后自动释放显存（每分钟检查一次），下次请求时重新加载。
+
+### Go 版
+
+#### 环境要求
+
+- Go 1.21+
+- 一个支持命令行调用的音频转写程序（如 [Whisper](https://github.com/openai/whisper) 或 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)）
+  - 要求：接受音频文件路径作为最后一个参数，并在同目录下生成同名 `.srt` 文件
+
+#### 编译
+
+```bash
+cd server
+go build -o transcribe-server .
+```
+
+#### 配置文件
+
+复制示例配置并按需修改：
+
+```bash
+cp server/config.example.toml config.toml
+```
+
+TOML 配置项说明：
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `addr` | string | `:8080` | 服务监听地址 |
+| `token` | string | 必填 | Bearer Token 鉴权密钥 |
+| `exec` | string 或 string[] | 必填 | 转写程序命令 |
+
+`exec` 支持两种格式：
+
+```toml
+# 格式一：字符串（支持带空格的路径，按 shell 规则拆分）
+exec = "C:\\Program Files\\whisper\\whisper.exe --model large --output_format srt"
+
+# 格式二：字符串数组（推荐，避免路径空格问题）
+exec = ["whisper", "--model", "large", "--output_format", "srt"]
+```
+
+#### 启动服务
+
+```bash
+./transcribe-server config.toml
+```
+
+服务启动后会输出监听地址，例如：`服务启动，监听地址: :8080`
+
+### HTTP 接口说明
+
+`/version` 和 `/transcribe` 均需携带 `Authorization: Bearer <token>` 请求头。Python 版另提供无需鉴权的 `GET /health` 健康检查接口。
+
+**`GET /version`** — 返回服务版本号：
+
+```json
+{"version": "2.0.0"}
+```
+
+Python 版返回 `{"version": "2.0.0-python"}`。
+
+**`POST /transcribe`** — 音频转写，返回 SSE 流，支持两种请求方式：
+
+- **文件上传**（`multipart/form-data`）：以 `audio` 字段上传音频文件；Go 版要求文件名包含允许的扩展名（默认 `m4a`、`m4s`），Python 版由音频解码器识别格式
+- **URL 下载**（`application/json`）：传入 `{"url": "...", "headers": {...}}`，服务端从 URL 下载音频
+
+两种方式的响应格式相同，均为 SSE 事件流，最终通过 `result` 事件返回 `{"srt": "..."}` 格式的 SRT 字幕内容。
+
+Python 版 URL 下载支持 `.m4a`、`.m4s`、`.mp3`、`.wav`、`.ogg`、`.flac` 和 `.aac` 扩展名。
+
+### 在扩展中配置
+
+1. 打开扩展设置页（点击扩展图标旁的「⋯」→「选项」）
+2. 在「自建字幕服务」区域填写：
+   - **API 地址**：Go 版如 `http://localhost:8080`，Python 版默认为 `http://127.0.0.1:8088`
+   - **Token**：与 Go 配置文件中的 `token` 或 Python 的 `WHISPER_TOKEN` 一致
+3. 点击「测试服务」验证连接，扩展会自动上传 `test/sample.m4a` 至 `/transcribe` 接口进行完整转写测试
+4. 在「音频转写服务」区域选择「自建服务」
+5. 保存设置
+
+配置完成后，在 B 站视频页面无 AI 字幕时，popup 将显示「音频转写并发送到ChatGPT」按钮，点击后转写进度会在 B 站页面以浮层形式展示，关闭 popup 后流程仍继续运行。
+
+## 技术栈
+
+- Chrome Extension Manifest V3
+- 原生 JavaScript，无需构建工具
+- Bilibili Web API（字幕获取、音频流获取）
+- DataTransfer API（模拟文件拖放上传）
+- [transformers.js](https://github.com/huggingface/transformers.js) — 本地 Whisper 推理（WebGPU / WASM）
+
+## lib/ 目录下的第三方文件
+
+`lib/` 目录不含于版本库，需手动下载。所有文件均来自 npm 包 `@huggingface/transformers@3.8.1`，版本号已嵌入文件名，升级时替换对应版本文件并同步修改 `offscreen.js` 和 `manifest.json` 中的引用即可。
+
+| 文件 | 来源 CDN URL | 说明 |
+|------|-------------|------|
+| `lib/transformers-3.8.1.min.js` | `https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js` | transformers.js 主库（ESM） |
+| `lib/ort-wasm-simd-threaded-3.8.1.jsep.mjs` | `https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/ort-wasm-simd-threaded.jsep.mjs` | ONNX Runtime WebGPU/WASM 入口（JS 模块，必须本地，受 CSP 限制） |
+
+`ort-wasm-simd-threaded.jsep.wasm`（20.6 MB）无需下载，运行时直接从 jsDelivr CDN 加载。
+
+## License
+
+MIT

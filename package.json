@@ -1,0 +1,20 @@
+{
+  "name": "vidsift",
+  "version": "5.1.1",
+  "private": true,
+  "description": "B站、YouTube、抖音内容提取并发送到 ChatGPT / AI Studio",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 tests/*.test.js",
+    "test:native": "python -m unittest discover -s tests/native -v",
+    "test:browser": "node tests/browser.cjs",
+    "version:sync": "node scripts/version.cjs --sync",
+    "version:check": "node scripts/version.cjs",
+    "check": "node scripts/check.cjs && npm run version:check && npm test",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Package.ps1",
+    "test:edge": "node tests/browser-flow.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.0"
+  }
+}

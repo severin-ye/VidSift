@@ -1,0 +1,13 @@
+*.exe
+*.zip
+.venv
+__pycache__
+*.log*
+.task-artifacts/
+.agent-status/
+node_modules/
+dist/
+playwright-report/
+test-results/
+*.pyc
+!manifest.json
