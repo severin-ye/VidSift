@@ -1,5 +1,5 @@
 'use strict';
-const _videoLibrary=new VidSiftVideoLibrary.VideoLibraryBridge(chrome);
+const _videoLibrary=new VidSiftVideoLibrary.VideoLibraryBridge(chrome,{onError:error=>_diagnostics.visibleError({component:'library',category:'library',message:'视频总结尚未保存到知行批注书库：'+error.message})});
 async function prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,openerTabId,videoTitle,tempChat}){
  if(tempChat||!taskId)return false;
  try{
@@ -22,7 +22,7 @@ async function prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,ope
   if(info.platform==='bilibili'&&VidSiftVideoLibrary.allowedCover(info.coverUrl)&&!info.coverUrl.includes('@'))info.coverUrl+='@640w_360h_1c.jpg';
   if(!VidSiftVideoLibrary.allowedCover(info.coverUrl))info.coverUrl='';
   await _videoLibrary.register({taskId,tabId:targetTabId,source:info,tempChat:false});return true;
- }catch(e){console.warn('视频总结书库记录尚未登记：',e.message);return false;}
+ }catch(e){await _diagnostics.visibleError({component:'library',category:'library',taskId,message:'视频总结书库记录尚未登记：'+e.message});console.warn('视频总结书库记录尚未登记：',e.message);return false;}
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
  if(msg.type==='VIDSIFT_TARGET_DONE'&&msg.ok===false){_videoLibrary.abandon(msg.taskId).catch(()=>{});return false;}

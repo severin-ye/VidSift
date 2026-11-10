@@ -16,6 +16,7 @@ const screenshotLabel = document.getElementById('screenshotLabel');
 const cancelBtn = document.getElementById('cancelBtn');
 const popupDiagnosticId='popup_'+Date.now()+'_'+Math.random().toString(36).slice(2);
 function popupDiagnostic(taskId,stage,details={},sourceTabId,sourceUrl){try{Promise.resolve(chrome.runtime.sendMessage({type:['popup.opened','popup.clicked','popup.source'].includes(stage)?'VIDSIFT_DIAGNOSTIC_START':'VIDSIFT_DIAGNOSTIC',taskId,stage,details,sourceTabId,sourceUrl})).catch(()=>{});}catch{}}
+globalThis.VidSiftErrors?.setTask(popupDiagnosticId);
 popupDiagnostic(popupDiagnosticId,'popup.opened');
 document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
 screenshotCheckbox.addEventListener('change', async () => {
@@ -111,6 +112,7 @@ updateUI();
 
 // Show/hide error
 function showError(msg) {
+  globalThis.VidSiftErrors?.report(msg,{component:'popup'});
   errorBox.textContent = msg;
   errorBox.classList.add('show');
 }
