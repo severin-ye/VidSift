@@ -1,8 +1,8 @@
 # 安装独立知行视频总结（VidSift）
 
-- 先把ZIP解压到固定目录，例如 `%LOCALAPPDATA%\VidSift\extension\5.1.1`；不要从临时解压目录加载。
+- 先把ZIP解压到固定目录，例如 `%LOCALAPPDATA%\VidSift\extension\5.2.2`；不要从临时解压目录加载。
 - 在Chrome的 `chrome://extensions` 或Edge的 `edge://extensions` 中，按浏览器提供的开发者加载流程选择“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录；需要的浏览器权限由用户在界面确认。
-- 核对名称知行视频总结、版本5.1.1、ID `kggdkncbamdlhhihfkeldbbkppkgihad`；原扩展可以保留，不需要卸载、关闭或替换。
+- 核对名称知行视频总结、版本5.2.2、ID `kggdkncbamdlhhihfkeldbbkppkgihad`；原扩展可以保留，不需要卸载、关闭或替换。
 - 两扩展同时启用时各自响应各自弹窗；执行任务时只操作其中一个弹窗，以免人为启动两个相同任务。
 - 从5.0.2起使用 `scripting` 权限，在已授权视频页或目标网站补载缺失脚本并读取当前作品资源；如浏览器要求确认，请在扩展管理页确认后重新加载，并刷新视频页。
 
@@ -18,7 +18,7 @@
 ```
 
 - 脚本在 `%LOCALAPPDATA%\VidSift` 创建独立Python 3.12环境、安装yt-dlp/youtube-transcript-api/Pillow，复用或获取FFmpeg，并注册当前用户的Chrome/Edge Native Messaging主机 `com.vidsift.media`。
-- 运行资源位于 `runtime`，版本程序位于 `releases\5.1.1\native\<安装ID>`，激活配置为 `runtime\current.json`；安装回执和回退文件保存在 `backups\native-<时间与ID>\rollback.json`。
+- 运行资源位于 `runtime`，版本程序位于 `releases\5.2.2\native\<安装ID>`，激活配置为 `runtime\current.json`；安装回执和回退文件保存在 `backups\native-<时间与ID>\rollback.json`。
 - 只允许当前独立VidSift的扩展ID连接；不是常驻HTTP服务，没有开机启动项，任务结束即退出。
 - 安装完成后，在VidSift设置页点击本机程序检测；如果以前装过测试用本机程序，需使用本包脚本再安装一次以更新允许的独立扩展ID。
 - `VIDSIFT_FFMPEG` 可指向已有FFmpeg；不需要新增API Key；自建转写地址和令牌仅在扩展自己的设置页填写，不写进源码。
