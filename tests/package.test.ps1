@@ -5,12 +5,16 @@ $version=(Get-Content (Join-Path $project 'package.json') -Raw|ConvertFrom-Json)
 $zip=Join-Path $project "dist/VidSift-$version-standalone.zip"
 $source=Get-Item -LiteralPath (Join-Path $project 'popup.html')
 $previousTime=$source.LastWriteTimeUtc
+function Get-PackageHash([string]$packagePath){
+ $algorithm=[Security.Cryptography.SHA256]::Create()
+ try{return [Convert]::ToBase64String($algorithm.ComputeHash([IO.File]::ReadAllBytes($packagePath)))}finally{$algorithm.Dispose()}
+}
 try {
  & $packageScript | Out-Null
- $first=(Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+ $first=Get-PackageHash $zip
  $source.LastWriteTimeUtc=$previousTime.AddDays(2)
  & $packageScript | Out-Null
- $second=(Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+ $second=Get-PackageHash $zip
  if($first -ne $second){throw 'Source modification time changed ZIP bytes; retry would replace the same version'}
  Add-Type -AssemblyName System.IO.Compression.FileSystem
  $archive=[IO.Compression.ZipFile]::OpenRead($zip)
