@@ -20,13 +20,19 @@
 </p>
 
 <p align="center">
-  <a href="#快速开始">快速开始</a> ·
+  <a href="https://github.com/severin-ye/VidSift/releases/tag/v5.2.3">下载与发布说明</a> ·
+  <a href="#快速开始">安装方法</a> ·
   <a href="#使用方式">使用方式</a> ·
   <a href="./INSTALL.md">完整安装说明</a> ·
   <a href="./PRIVACY_POLICY.md">隐私说明</a> ·
   <a href="./CHANGELOG.md">更新记录</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/severin-ye/VidSift/releases/download/v5.2.3/VidSift-5.2.3-standalone.zip"><strong>⬇ 下载扩展 ZIP · v5.2.3 测试版</strong></a>
+</p>
+
+- **普通用户从发布页下载 ZIP 即可，不需要克隆代码，也不需要安装 Node.js 或 npm。**
 - **当前处于测试阶段**，部分真实网站流程仍待验收，本机程序目前提供 Windows 安装脚本。
 - 默认流程使用你已登录的 ChatGPT / Google AI Studio 网页，不需要填写 API Key，但需要能访问对应服务并登录账号。
 
@@ -95,21 +101,19 @@
 
 ## 快速开始
 
-### 1. 加载扩展
+### 1. 下载、解压并加载
 
-```powershell
-git clone https://github.com/severin-ye/VidSift.git
-cd VidSift
-```
+1. 打开[发布页](https://github.com/severin-ye/VidSift/releases/tag/v5.2.3)，在 **Assets** 中下载 `VidSift-5.2.3-standalone.zip`，也可以[直接下载 ZIP](https://github.com/severin-ye/VidSift/releases/download/v5.2.3/VidSift-5.2.3-standalone.zip)。
+2. 将 ZIP 全部解压到固定文件夹，确认其中能看到 `manifest.json`，不要只在压缩软件内打开。
+3. 在 Chrome 打开 `chrome://extensions`，或在 Edge 打开 `edge://extensions`，开启“开发者模式”。
+4. 点击“加载已解压的扩展程序”，选择上一步包含 `manifest.json` 的文件夹，按浏览器提示确认权限。
+5. 核对名称为“知行视频总结”，再将它固定到工具栏。
 
-1. 从本仓库下载源码 ZIP 并解压到固定目录，或用下面的命令克隆，找到包含 `manifest.json` 的 VidSift 文件夹。
-2. 在 Chrome 打开 `chrome://extensions`，或在 Edge 打开 `edge://extensions`。
-3. 开启开发者模式，选择“加载已解压的扩展程序”，选中该文件夹并按浏览器提示确认权限。
-4. 核对名称为“知行视频总结”，并将它固定到浏览器工具栏。
-
+- 发布页的 `Source code (zip)` / `Source code (tar.gz)` 是开发源码，请选择上面有完整文件名的扩展安装包。
+- 浏览器需要加载解压后的文件夹，不能把 ZIP 当作商店安装按钮直接打开，加载后也不要删除或移动该文件夹。
+- 普通用户不需要运行 Git、`npm ci` 或构建命令，下面只有使用部分媒体功能时才需要额外安装本机程序。
 - 扩展 ID 为 `kggdkncbamdlhhihfkeldbbkppkgihad`，可以保留原版扩展，无需卸载。
-- 源码或可加载 ZIP 需要解压后加载，不是可直接安装的商店签名 CRX。
-- 升级后若页面仍使用旧脚本，请重新加载扩展并刷新视频页及目标网页。
+- 更新时将新版解压到原加载目录并在扩展管理页点击“重新加载”，随后刷新视频页和目标网页，保留浏览器设置与原有数据。
 
 ### 2. 按需安装本机程序
 
@@ -118,7 +122,7 @@ cd VidSift
 - 在 VidSift 文件夹打开 PowerShell，执行：
 
 ```powershell
-.\installer\Install-NativeHost.ps1 -ProjectRoot (Get-Location).Path
+.\installer\Install-NativeHost.ps1 -ProjectRoot (Get-Location).Path -Version 5.2.3
 ```
 
 - 安装器会在 `%LOCALAPPDATA%\VidSift` 创建 Python 3.12 环境，安装媒体依赖，并注册 Chrome / Edge 的 Native Messaging 主机。
@@ -251,6 +255,14 @@ git submodule update --init -- 2_Business/VidSift
 
 - 扩展采用 Manifest V3，界面和内容脚本使用 JavaScript / HTML / CSS，本机媒体程序使用 Python。
 - 开发检查需要 Node.js 与 npm，浏览器测试使用 Playwright，Windows 打包使用 PowerShell。
+- 本节仅供参与开发的用户，使用发布 ZIP 安装扩展时不需要执行。
+- 如需修改源码，先克隆独立仓库，再安装开发依赖：
+
+```powershell
+git clone https://github.com/severin-ye/VidSift.git
+cd VidSift
+```
+
 - 在包含 `package.json` 的 VidSift 目录执行：
 
 ```powershell
