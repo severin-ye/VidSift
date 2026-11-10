@@ -25,7 +25,7 @@
      await this.assertLive(task);
      if(!pageSource)status('STATUS','当前页面未提供完整原视频地址，改用限时解析...');
     }
-    const local=source.platform==='douyin'&&msg.transcribeService==='local';
+    const local=source.platform==='douyin'&&['local','groq'].includes(msg.transcribeService);
     let result;
     if(local&&!d.normalize(msg.screenshotSettings).enabled&&d.loadLocalMedia){result=await d.loadLocalMedia(task,pageSource);await this.assertLive(task);if(result){log('local.media_reused');status('STATUS','已核验并复用本作品的完整音频，不重新下载');}}
     if(!result){
@@ -50,11 +50,12 @@
     const common={...msg,taskId:task.id,biliTabId:tabId,videoTitle:context.title,bvid:context.videoId,source:context,localAudio,task};
     if(!srt){
      if(!result.audio&&!localAudio)throw new Error('未取得可用字幕或完整音频，请检查视频访问权限');
-     if(source.platform==='douyin'&&msg.transcribeService==='local'){
-      if(!localAudio||typeof task.client.readPcmWindow!=='function')throw new Error('本机媒体程序不支持分段本地转写，请更新本包本机程序');
-      log('local.start',{duration:result.duration});
+     if(source.platform==='douyin'&&['local','groq'].includes(msg.transcribeService)){
+      if(!localAudio)throw new Error('本机媒体程序不支持当前音轨转写，请更新本包本机程序');
+      if(msg.transcribeService==='local'&&typeof task.client.readPcmWindow!=='function')throw new Error('本机媒体程序不支持分段本地转写，请更新本包本机程序');
+      log(msg.transcribeService==='groq'?'groq.prepare':'local.start',{duration:result.duration});
       srt=await d.transcribe(null,common,status,task.controller.signal);
-      if(!srt?.trim())throw new Error('本地转写没有取得有效口播文字，未发送到 ChatGPT');
+      if(!srt?.trim())throw new Error('音轨转写没有取得有效口播文字，未发送到 ChatGPT');
      }else{
       status('STATUS','正在读取视频音频...');const audio=await task.client.readAsset(result.audio.assetId);await this.assertLive(task);
       if((msg.transcribeService||'aistudio')==='aistudio'){

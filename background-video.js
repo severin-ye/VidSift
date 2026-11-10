@@ -59,6 +59,15 @@ async function sendVideoAIStudio(data){
 let _localTranscription;
 let _localMediaCache;
 async function transcribeVideo(audio,data,notify,signal){
+ if(data.transcribeService==='groq'){
+  if(!data.localAudio||typeof data.task.client.transcribeGroq!=='function')throw new Error('本机程序不支持Groq转写，请更新本包本机程序');
+  if(signal.aborted)throw new Error('视频处理已取消');
+  diagnoseTask(data.task,'groq.start');notify('STATUS','正在上传完整音轨到Groq并转写...');
+  const result=await data.task.client.transcribeGroq(data.localAudio,data.groqSettings,text=>notify('STATUS',text));
+  if(signal.aborted||data.task.cancelled)throw new Error('视频处理已取消');
+  if(!result.srt?.trim())throw new Error('Groq没有返回有效逐字稿，未发送到ChatGPT');
+  diagnoseTask(data.task,'groq.completed',{duration:result.duration,elapsedMs:result.elapsedMs,originalBytes:result.inputBytes,outputBytes:result.uploadedBytes,subtitleCount:result.segmentCount});return result.srt;
+ }
  if(data.localAudio){
   _localTranscription||=new LocalTranscription({runtime:chrome.runtime,storage:chrome.storage.local,ensureOffscreen:ensureOffscreenDocument});
   return _localTranscription.start({taskId:data.task.id,descriptor:data.localAudio,client:data.task.client,model:data.model,device:data.device,settings:data.localSettings,signal,onProgress:text=>{diagnoseTask(data.task,'local.progress',{phase:'transcription'});notify('STATUS',text);}});
@@ -113,16 +122,20 @@ chrome.runtime.onConnect.addListener(port=>{
   (async()=>{
    const platform=VidSiftPlatforms.identify(msg.sourceUrl)?.platform;
    if(platform==='douyin'){
-    const stored=await chrome.storage.local.get(['transcribeService','localModel','localDevice','douyinTranscribeService','douyinLocalSettings']);
+    const stored=await chrome.storage.local.get(['transcribeService','localModel','localDevice','douyinTranscribeService','douyinLocalSettings','groqSettings']);
     const selected=DouyinLocalSettings.resolve(platform,stored);
-    Object.assign(msg,{transcribeService:selected.service,model:selected.model,device:selected.device,localSettings:selected.settings});
-    if(stored.douyinTranscribeService===undefined)await chrome.storage.local.set({douyinTranscribeService:'local'});
+    Object.assign(msg,{transcribeService:selected.service,model:selected.model,device:selected.device,localSettings:selected.settings,groqSettings:selected.groq});
+    if(stored.douyinTranscribeService===undefined)await chrome.storage.local.set({douyinTranscribeService:'groq'});
    }
    await _videoWorkflow.start(msg,notify);
   })().catch(e=>notify('ERROR',e.message));
  });
 });
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
+ if(msg.type==='VIDSIFT_GROQ_STATUS'){
+  if(sender.id!==chrome.runtime.id||sender.url!==chrome.runtime.getURL('options.html')){sendResponse({ok:false});return false;}
+  (async()=>{let client;try{client=new NativeMediaClient();sendResponse({ok:true,...await client.groqStatus()});}catch(e){sendResponse({ok:false,error:e.message});}finally{client?.close();}})();return true;
+ }
  if(msg.type==='VIDSIFT_DIAGNOSTIC_START'){
   if(sender.tab||!sender.url?.endsWith('/popup.html')){sendResponse({ok:false});return false;}
   _diagnostics.begin(msg.taskId,{sourceTabId:msg.sourceTabId,...(VidSiftPlatforms.identify(msg.sourceUrl)||{})}).then(()=>_diagnostics.record(msg.taskId,msg.stage||'popup.clicked',msg.details)).then(ok=>sendResponse({ok}));return true;

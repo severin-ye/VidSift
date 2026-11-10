@@ -30,6 +30,7 @@ try {
  foreach($name in @('host.py','__init__.py','THIRD_PARTY.md')){Copy-Item -LiteralPath (Join-Path 'native' $name) -Destination (Join-Path $stage 'native')}
  Copy-Item -LiteralPath 'docs/README.upstream.md' -Destination (Join-Path $stage 'docs')
  Copy-Item -LiteralPath 'docs/中文模型对比-2026-11-10.md' -Destination (Join-Path $stage 'docs')
+ Copy-Item -LiteralPath 'docs/Groq中文转写实测-2026-11-11.md' -Destination (Join-Path $stage 'docs')
  if(Test-Path -LiteralPath 'docs/superpowers'){Copy-Item -LiteralPath 'docs/superpowers' -Destination (Join-Path $stage 'docs') -Recurse}
  New-Item -ItemType Directory -Force -Path (Join-Path $stage 'scripts') | Out-Null
  Copy-Item -LiteralPath 'scripts/diagnostics.py' -Destination (Join-Path $stage 'scripts')

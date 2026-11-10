@@ -1,6 +1,8 @@
 *.exe
 *.zip
 .venv
+.env
+.env.*
 __pycache__
 *.log*
 .task-artifacts/

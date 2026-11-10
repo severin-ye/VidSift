@@ -6,6 +6,7 @@ see THIRD_PARTY.md for original sources and full license. No ASR runs here.
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 import html
 import io
 import json
@@ -344,6 +345,106 @@ def failure_category(stderr):
     return '平台或媒体工具未能完成处理'
 
 
+GROQ_MODELS = ('whisper-large-v3', 'whisper-large-v3-turbo')
+GROQ_UPLOAD_LIMIT = 24_000_000
+
+
+def groq_key():
+    value = os.environ.get('GROQ_API_KEY', '').strip()
+    if value: return value
+    try:
+        for line in (Path.home() / '.env').read_text(encoding='utf-8-sig').splitlines():
+            match = re.fullmatch(r'\s*(?:export\s+)?GROQ_API_KEY\s*=\s*(.*?)\s*', line)
+            if match:
+                value = match[1]
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"): value = value[1:-1]
+                else: value = re.split(r'\s+#', value, maxsplit=1)[0].strip()
+                return value
+    except (OSError, UnicodeError): pass
+    return ''
+
+
+def groq_settings(request):
+    model = request.get('model', 'whisper-large-v3-turbo')
+    timeout = request.get('timeoutSeconds', 180)
+    if model not in GROQ_MODELS: raise ValueError('Groq 转写模型不在允许清单中')
+    if not positive_number(timeout) or not 30 <= timeout <= 600: raise ValueError('Groq 超时须在 30–600 秒之间')
+    return model, timeout
+
+
+def groq_result(payload, duration, model):
+    if not isinstance(payload, dict) or not positive_number(payload.get('duration')) or abs(payload['duration'] - duration) > max(3, duration * .002):
+        raise ValueError('Groq 返回时长与完整音频不符')
+    segments = payload.get('segments')
+    if not isinstance(segments, list) or not segments or len(segments) > min(20000, duration * 10 + 20): raise ValueError('Groq 字幕分段为空或数量异常')
+    def stamp(value):
+        ms = round(value * 1000)
+        return f'{ms // 3600000:02}:{ms // 60000 % 60:02}:{ms // 1000 % 60:02},{ms % 1000:03}'
+    rows, last, previous, repeats, text_size = [], -1, '', 0, 0
+    for segment in segments:
+        if not isinstance(segment, dict): raise ValueError('Groq 字幕分段格式无效')
+        start, end, text = segment.get('start'), segment.get('end'), segment.get('text')
+        if not isinstance(start, (int, float)) or isinstance(start, bool) or not math.isfinite(start) or start < 0 or not positive_number(end) or start >= end or end > duration + 3 or start < last:
+            raise ValueError('Groq 字幕时间戳无效')
+        if not isinstance(text, str) or not text.strip() or '\x00' in text: raise ValueError('Groq 字幕内容无效')
+        text = text.strip().replace('\r', '').replace('\n', ' ')
+        text_size += len(text)
+        if text_size > min(200000, duration * 40 + 1000): raise ValueError('Groq 字幕内容体积异常')
+        repeats = repeats + 1 if text == previous else 1
+        if repeats >= 5: raise ValueError('Groq 字幕存在异常重复')
+        previous, last = text, start
+        rows.append(f'{len(rows)+1}\n{stamp(start)} --> {stamp(end)}\n{text}\n')
+    result = {'srt':'\n'.join(rows), 'model':model, 'duration':payload['duration'], 'segmentCount':len(rows)}
+    if len(json.dumps(result, ensure_ascii=False).encode('utf-8')) > MAX_MESSAGE - 4096: raise ValueError('Groq 字幕超过本地消息上限')
+    return result
+
+
+class GroqNoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError('Groq 请求出现非预期重定向')
+
+
+@contextmanager
+def groq_open(request, timeout):
+    import requests
+    from urllib.error import HTTPError
+    response = requests.request(request.get_method(), request.full_url, data=request.data,
+                                headers=dict(request.header_items()), timeout=(min(15, timeout), timeout),
+                                allow_redirects=False, stream=True)
+    try:
+        if 300 <= response.status_code < 400: raise ValueError('Groq 请求出现非预期重定向')
+        if response.status_code >= 400: raise HTTPError(request.full_url, response.status_code, 'Groq HTTP error', {}, None)
+        response.raw.decode_content = True
+        yield response.raw
+    finally:
+        response.close()
+
+
+def groq_upload(path, duration, model, timeout):
+    from urllib.error import HTTPError
+    key = groq_key()
+    if not key: raise ValueError('本机未配置 GROQ_API_KEY')
+    if any(ord(char) < 33 or ord(char) > 126 for char in key): raise ValueError('本机 GROQ_API_KEY 格式无效')
+    size = path.stat().st_size
+    if not 0 < size <= GROQ_UPLOAD_LIMIT: raise ValueError('Groq 上传音频超过 24 MB；本次未上传，请缩短音频')
+    boundary = 'VidSift' + uuid.uuid4().hex
+    fields = {'model': model, 'language':'zh', 'response_format':'verbose_json', 'timestamp_granularities[]':'segment', 'temperature':'0'}
+    parts = [f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode() for name,value in fields.items()]
+    parts.extend([f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.mp4"\r\nContent-Type: audio/mp4\r\n\r\n'.encode(), path.read_bytes(), f'\r\n--{boundary}--\r\n'.encode()])
+    request = Request('https://api.groq.com/openai/v1/audio/transcriptions', data=b''.join(parts), headers={'Authorization':'Bearer '+key, 'Content-Type':'multipart/form-data; boundary='+boundary}, method='POST')
+    try:
+        with groq_open(request, timeout) as response:
+            raw = response.read(4 * MAX_MESSAGE + 1)
+    except HTTPError as error:
+        raise ValueError(f'Groq HTTP {error.code}，未自动重试') from None
+    except Exception:
+        raise ValueError('Groq 网络连接失败或超时，未自动重试') from None
+    if len(raw) > 4 * MAX_MESSAGE: raise ValueError('Groq 响应体积超过限制')
+    try: payload = json.loads(raw)
+    except (ValueError, UnicodeError): raise ValueError('Groq 响应不是有效 JSON') from None
+    return groq_result(payload, duration, model)
+
+
 class Job:
     def __init__(self, task_id):
         self.id = task_id
@@ -409,7 +510,6 @@ class Job:
 
 import hashlib
 import ctypes
-from contextlib import contextmanager
 
 
 def file_hash(path):
@@ -771,7 +871,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.3.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.4.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
@@ -828,6 +928,42 @@ def validate_audio_duration(progress_output, expected):
 
 
 class Service:
+    def transcribe_groq(self, request, job, progress):
+        job.check()
+        model, timeout = groq_settings(request)
+        fingerprint = request.get('fingerprint')
+        cache, pin, temporary = self.local_audio, None, None
+        started = time.monotonic()
+        try:
+            pin = cache.pin_window(fingerprint)
+            path, entry = cache.lookup(fingerprint)
+            if entry['videoId'] != request.get('videoId'): raise ValueError('Groq 音频作品编号不匹配')
+            cache._verify(entry)
+            input_bytes = path.stat().st_size
+            if input_bytes > GROQ_UPLOAD_LIMIT:
+                ffmpeg = find_ffmpeg()
+                if not ffmpeg: raise ValueError('Groq 大音频压缩需要 FFmpeg')
+                temporary = cache.root / (uuid.uuid4().hex + '.m4a')
+                progress('正在压缩完整音频供 Groq 上传')
+                job.run([ffmpeg,'-nostdin','-hide_banner','-loglevel','error','-i',str(path),'-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','aac','-b:a','64k','-y',str(temporary)], timeout=180)
+                path = temporary
+            uploaded_bytes = path.stat().st_size
+            if not 0 < uploaded_bytes <= GROQ_UPLOAD_LIMIT: raise ValueError('Groq 压缩后仍超过 24 MB，未上传且未截断音频；请缩短音频')
+            progress('正在向 Groq 上传完整音频并等待转写')
+            # Isolated process owns the socket; cancellation kills it promptly.
+            # This discards local late results, but cannot promise server cancellation.
+            output, _ = job.run([sys.executable, str(Path(__file__).resolve()), '--groq-worker', str(path), str(entry['duration']), model, str(timeout)], timeout=timeout + 15)
+            job.check()
+            try: reply = json.loads(output)
+            except ValueError: raise ValueError('Groq 本地工作进程响应无效') from None
+            if reply.get('error'): raise ValueError(reply['error'])
+            result = reply['result']
+            result.update(elapsedMs=round((time.monotonic()-started)*1000), inputBytes=input_bytes, uploadedBytes=uploaded_bytes)
+            return result
+        finally:
+            if temporary: temporary.unlink(missing_ok=True)
+            if pin: cache.unpin_window(fingerprint, pin)
+
     def __init__(self, root=None):
         self.store = AssetStore(root or ROOT / 'cache')
         self.local_audio = LocalAudioCache(self.store.root, uuid.uuid4().hex)
@@ -1310,6 +1446,8 @@ class Host:
             action = request.get('action')
             if action == 'resolve':
                 result = self.service.resolve(request, job, progress)
+            elif action == 'transcribe_groq':
+                result = self.service.transcribe_groq(request, job, progress)
             elif action == 'prepare_local_audio':
                 result = self.service.local_audio.claim(request.get('fingerprint'), request.get('videoId'))
                 job.check()
@@ -1389,7 +1527,9 @@ class Host:
         action = request.get('action')
         if action in ('diagnostics', 'ping'):
             self.emit({'id': task_id, 'type': 'result', 'result': diagnostics()})
-        elif action in ('resolve', 'prepare_local_audio', 'local_audio_finish', 'read_pcm_window', 'model_file_info', 'model_file_chunk'):
+        elif action == 'groq_status':
+            self.emit({'id': task_id, 'type': 'result', 'result': {'configured':bool(groq_key())}})
+        elif action in ('resolve', 'prepare_local_audio', 'local_audio_finish', 'read_pcm_window', 'model_file_info', 'model_file_chunk', 'transcribe_groq'):
             with self.lock:
                 if task_id in self.jobs or len(self.jobs) >= 2:
                     raise ValueError('任务编号已在使用，或本地任务数量已达上限')
@@ -1443,6 +1583,19 @@ class Host:
 
 def main():
     args = sys.argv[1:]
+    if args and args[0] == '--groq-worker':
+        try:
+            if len(args) != 5: raise ValueError('Groq 工作参数无效')
+            model, timeout = groq_settings({'model':args[3], 'timeoutSeconds':float(args[4])})
+            result = groq_upload(Path(args[1]), float(args[2]), model, timeout)
+            reply = {'result':result}
+        except ValueError as error:
+            reply = {'error':str(error)}
+        except Exception:
+            reply = {'error':'Groq 本地工作进程失败'}
+        # UTF-8 protocol independent of Windows console's legacy code page.
+        sys.stdout.buffer.write(json.dumps(reply, ensure_ascii=False).encode('utf-8'))
+        return 0
     if args[:1] == ['--transcript'] and len(args) == 2:
         # Private subprocess mode accepts only a YouTube ID, never a URL or path.
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', args[1]):

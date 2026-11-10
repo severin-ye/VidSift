@@ -3,6 +3,13 @@ const assert=require('node:assert/strict');
 const {NativeMediaClient}=require('../native-client.js');
 function event(){const listeners=[];return {addListener:f=>listeners.push(f),emit:x=>listeners.forEach(f=>f(x))};}
 function runtime(){const p={onMessage:event(),onDisconnect:event(),postMessage:m=>p.last=m,disconnect:()=>p.onDisconnect.emit()};return {p,connectNative:()=>p};}
+test('Groq requests only descriptor and settings and discards cancelled late results',async()=>{
+ const r=runtime(),c=new NativeMediaClient(r);let p=c.groqStatus();assert.equal(r.p.last.action,'groq_status');
+ r.p.onMessage.emit({id:r.p.last.id,type:'result',result:{configured:true}});assert.deepEqual(await p,{configured:true});
+ p=c.transcribeGroq({fingerprint:'hash',videoId:'123',secret:'never'},{model:'whisper-large-v3',timeoutSeconds:300});
+ const id=r.p.last.id;assert.equal(r.p.last.action,'transcribe_groq');assert.equal(r.p.last.model,'whisper-large-v3');assert.equal(r.p.last.secret,undefined);
+ c.cancel();await assert.rejects(p,/取消/);r.p.onMessage.emit({id,type:'result',result:{srt:'late'}});assert.equal(c.pending.size,0);c.close();
+});
 test('streams base64 chunks in order and resolves only final result',async()=>{
  const r=runtime(),c=new NativeMediaClient(r);const pending=c.readAsset('asset');const id=r.p.last.id;
  r.p.onMessage.emit({id,type:'chunk',sequence:0,data:'YWJj'});

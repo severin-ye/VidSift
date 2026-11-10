@@ -20,6 +20,13 @@ function fixture({failHandoff=false,failTarget=false,pauseReady}={}){
 test('real legacy START_TASK with only openerTabId opens target and sends subtitle until acknowledged',async()=>{
  const f=fixture(),notes=await f.start();assert.equal(notes.some(x=>x.type==='ERROR'),false,JSON.stringify(notes));assert.equal(f.created.length,1);assert.equal(f.created[0].openerTabId,7);assert.equal(f.sent.find(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').msg.file.content,'hello');assert.equal(notes.at(-1).type,'DONE');
 });
+test('Groq configuration check accepts the actual options tab but rejects website messages',async()=>{
+ const f=fixture();f.context.chrome.runtime.id='extension';f.context.chrome.runtime.getURL=p=>'chrome-extension://extension/'+p;let calls=0;
+ f.context.NativeMediaClient=class {async groqStatus(){calls++;return {configured:true};}close(){}};
+ const result=await f.dispatch({type:'VIDSIFT_GROQ_STATUS'},{id:'extension',url:'chrome-extension://extension/options.html',tab:{id:20}});
+ assert.equal(result.ok,true);assert.equal(result.configured,true);assert.equal(calls,1);
+ assert.equal((await f.dispatch({type:'VIDSIFT_GROQ_STATUS'},{id:'extension',url:'https://evil.test/options.html',tab:{id:20}})).ok,false);assert.equal(calls,1);
+});
 test('missing or malformed source tab fails explicitly without invoking tabs API',async()=>{
  for(const biliTabId of [undefined,'7',-1,1.5]){const f=fixture(),notes=await f.start({openerTabId:undefined,biliTabId});assert.match(notes.at(-1).text,/来源.*标签页/);assert.equal(f.getIds.length,0);assert.equal(f.created.length,0);}
 });

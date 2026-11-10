@@ -6,6 +6,7 @@ let transcribeService = 'aistudio'; // 'aistudio' | 'selfhosted' | 'local'
 let localModel = null;
 let localDevice = null;
 let douyinLocalSettings = null;
+let groqSettings = null;
 let activeTranscribeTask = null;
 let statusTabId = null;
 let viewingTaskTarget = false;
@@ -313,7 +314,7 @@ async function run() {
         }
       });
       port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看处理状态');}});
-      port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:pageUrl,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,selfHostedUrl:config.selfHostedApiUrl,selfHostedToken:config.selfHostedApiToken});
+      port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:pageUrl,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings,selfHostedUrl:config.selfHostedApiUrl,selfHostedToken:config.selfHostedApiToken});
       handedOff=true; canClose=true;cancelBtn.style.display='';runBtn.disabled=true;setStatus('已移交后台；重新打开扩展可查看进度');return;
     }
 
@@ -489,7 +490,7 @@ runBtn.addEventListener('click', run);
 (async () => {
   try {
     // 先加载服务来源配置
-    const storageResult = await chrome.storage.local.get(['transcribeService', 'localModel', 'localDevice', 'screenshotSettings','audioSettings','douyinTranscribeService','douyinLocalSettings']);
+    const storageResult = await chrome.storage.local.get(['transcribeService', 'localModel', 'localDevice', 'screenshotSettings','audioSettings','douyinTranscribeService','douyinLocalSettings','groqSettings']);
     screenshotSettings = ScreenshotSettings.normalize(storageResult.screenshotSettings);
     audioSettings = AudioSettings.normalize(storageResult.audioSettings);
     screenshotCheckbox.checked=screenshotSettings.enabled;
@@ -505,7 +506,7 @@ runBtn.addEventListener('click', run);
     currentPlatform=VidSiftPlatforms.identify(pageUrl)?.platform || '';
     if(currentPlatform==='douyin'){
       const selected=DouyinLocalSettings.resolve('douyin',storageResult);
-      transcribeService=selected.service;localModel=selected.model;localDevice=selected.device;douyinLocalSettings=selected.settings;updateUI();
+      transcribeService=selected.service;localModel=selected.model;localDevice=selected.device;douyinLocalSettings=selected.settings;groqSettings=selected.groq;updateUI();
     }
     const taskStatus = await getActiveTranscribeTask(tab.id);
     if (!VidSiftPlatforms.identify(pageUrl)) {

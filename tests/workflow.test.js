@@ -22,6 +22,14 @@ test('Douyin local transcription reads bounded PCM through descriptor without re
  assert.equal(request.localTranscription,true);assert.equal(request.localSettings.maxDuration,3600);assert.equal(wholeReads,0);
  assert.equal(f.sent.length,1);assert.match(f.sent[0].file.content,/中文/);assert.equal(completed.status,'success');
 });
+test('Douyin Groq uses the Native descriptor and never reads whole audio into browser',async()=>{
+ const id='7703625319965543714',url='https://www.douyin.com/video/'+id,localAudio={fingerprint:'a'.repeat(64),videoId:id,duration:301,sampleRate:16000};
+ const result={platform:'douyin',videoId:id,duration:301,audio:{assetId:'aud'},audioInfo:{},localAudio,images:[]},f=fixture(result);f.deps.getTab=async()=>({url});
+ f.client.readAsset=async()=>{throw Error('must not transfer whole audio');};let request;f.client.resolve=async value=>{request=value;return result;};
+ f.deps.transcribe=async(audio,data)=>{assert.equal(audio,null);assert.equal(data.transcribeService,'groq');assert.equal(data.groqSettings.model,'whisper-large-v3-turbo');return '1\n00:00:00,000 --> 00:00:01,000\n完整文字';};
+ const run=f.workflow.start({openerTabId:1,sourceUrl:url,transcribeService:'groq',groqSettings:{model:'whisper-large-v3-turbo'}});await new Promise(r=>setImmediate(r));assert.equal(request.localTranscription,true);assert.equal(f.sent.length,1);f.complete();await run;
+ const failed=fixture(result);failed.deps.getTab=async()=>({url});failed.deps.transcribe=async()=>{throw Error('Groq限流，未改走其他服务');};await assert.rejects(failed.workflow.start({openerTabId:1,sourceUrl:url,transcribeService:'groq'}),/Groq限流/);assert.equal(failed.sent.length,0);assert.deepEqual(failed.released,['aud']);
+});
 
 test('failed local transcription preserves retry lease and never sends to GPT',async()=>{
  const id='7703625319965543714',url='https://www.douyin.com/video/'+id,localAudio={fingerprint:'a'.repeat(64),videoId:id,duration:5};

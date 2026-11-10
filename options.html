@@ -277,15 +277,16 @@ html, body {
   <!-- 音频转写服务配置 -->
   <div class="section-title">抖音转写</div>
   <div class="local-subsection" id="douyinLocalBlock">
-    <p>抖音默认在本机浏览器转写，完成后交给 GPT；B站和 YouTube 沿用下方全局设置。</p>
-    <label>转写方式 <select id="douyinService"><option value="local">浏览器 Whisper</option><option value="global">跟随全局</option><option value="aistudio">AI Studio</option><option value="selfhosted">自建服务</option></select></label>
-    <p><label>量化模型 <select id="douyinModel"><option value="Xenova/whisper-base">base · 约77 MB（较快，中文错字较多）</option><option value="Xenova/whisper-small">small · 约249 MB（中文推荐）</option></select></label></p>
-    <p><label>设备 <select id="douyinDevice"><option value="wasm">CPU / WASM（本机已验证）</option><option value="webgpu" disabled>WebGPU（本机质量未通过，暂停选择）</option></select></label> <label>CPU线程 <input id="douyinThreads" type="number" min="1" max="8" style="width:65px"></label></p>
+    <p>抖音默认由 Groq 云端转写，完成后交给 GPT；B站和 YouTube 沿用下方全局设置。</p>
+    <label>转写方式 <select id="douyinService"><option value="groq">Groq 云端转写</option><option value="local">浏览器 Whisper</option><option value="global">跟随全局</option><option value="aistudio">AI Studio</option><option value="selfhosted">自建服务</option></select></label>
+    <div data-groq-only><p><label>Groq 模型 <select id="groqModel"><option value="whisper-large-v3-turbo">Whisper large-v3 turbo（推荐）</option><option value="whisper-large-v3">Whisper large-v3</option></select></label> <label>请求超时（秒） <input id="groqTimeout" type="number" min="30" max="600" style="width:75px"></label></p><p>密钥由本机程序读取个人目录 .env 中的 GROQ_API_KEY，不保存到扩展或安装包。</p><button id="groqCheck">检测 Groq 配置</button><span id="groqStatus" role="status"></span></div>
+    <p data-local-only><label>量化模型 <select id="douyinModel"><option value="Xenova/whisper-base">base · 约77 MB（较快，中文错字较多）</option><option value="Xenova/whisper-small">small · 约249 MB（中文推荐）</option></select></label></p>
+    <p data-local-only><label>设备 <select id="douyinDevice"><option value="wasm">CPU / WASM（本机已验证）</option><option value="webgpu" disabled>WebGPU（本机质量未通过，暂停选择）</option></select></label> <label>CPU线程 <input id="douyinThreads" type="number" min="1" max="8" style="width:65px"></label></p>
     <p><label>最长视频（分钟） <input id="douyinMaxMinutes" type="number" min="1" max="360" style="width:75px"></label> <label>来源文件上限（MiB） <input id="douyinMaxBytes" type="number" min="1" max="4096" style="width:85px"></label></p>
     <p><label>媒体缓存上限（MiB） <input id="douyinCacheBytes" type="number" min="64" max="20480" style="width:85px"></label> <label>启动内存预估上限（MiB） <input id="douyinMemory" type="number" min="512" max="8192" style="width:85px"></label></p>
     <p class="hint">启动前按模型大小保守估算内存；这不是浏览器进程的硬限额，实际占用由浏览器和推理运行时决定。</p>
     <p><label>失败媒体保留（小时） <input id="douyinFailureHours" type="number" min="1" max="168" style="width:65px"></label> <label>成功媒体保留（小时） <input id="douyinSuccessHours" type="number" min="0" max="48" style="width:65px"></label></p>
-    <p>模型首次自动下载并校验，在本机共享模型目录复用；媒体分段读取，取消后停止计算，本地失败不会自动上传 AI Studio。</p>
+    <p>Groq 接收完整音轨并返回带时间戳逐字稿；超过免费上传上限会先压缩，仍超限则明确停止，失败不会自动改走其他云端服务。</p>
     <div class="btn-row"><button class="save-btn" id="douyinLocalSave">保存本块</button><button class="reset-btn" id="douyinLocalReset">恢复本块默认</button><span id="douyinLocalStatus" role="status"></span></div>
   </div>
   <div class="section-title">音频转写服务</div>
