@@ -14,6 +14,9 @@ let audioSettings = AudioSettings.normalize();
 const screenshotCheckbox = document.getElementById('screenshotCheckbox');
 const screenshotLabel = document.getElementById('screenshotLabel');
 const cancelBtn = document.getElementById('cancelBtn');
+const popupDiagnosticId='popup_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+function popupDiagnostic(taskId,stage,details={},sourceTabId,sourceUrl){try{Promise.resolve(chrome.runtime.sendMessage({type:['popup.opened','popup.clicked','popup.source'].includes(stage)?'VIDSIFT_DIAGNOSTIC_START':'VIDSIFT_DIAGNOSTIC',taskId,stage,details,sourceTabId,sourceUrl})).catch(()=>{});}catch{}}
+popupDiagnostic(popupDiagnosticId,'popup.opened');
 document.getElementById('optionsBtn').addEventListener('click', () => chrome.runtime.openOptionsPage());
 screenshotCheckbox.addEventListener('change', async () => {
  screenshotSettings = {...screenshotSettings, enabled:screenshotCheckbox.checked};
@@ -258,6 +261,9 @@ function subtitleToSrt(body) {
 // Main flow
 async function run() {
   if (isRunning) return;
+  const diagnosticId='click_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+  function diagnose(stage,details={},sourceTabId,sourceUrl){popupDiagnostic(diagnosticId,stage,details,sourceTabId,sourceUrl);}
+  diagnose('popup.clicked');
 
   hideError();
   isRunning = true;
@@ -268,6 +274,7 @@ async function run() {
     // Get current tab URL
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const pageUrl = tab.url || '';
+    diagnose('popup.source',{},tab.id,pageUrl);
 
     const taskStatus = await getActiveTranscribeTask(tab.id);
     if (taskStatus.active) {
@@ -303,7 +310,7 @@ async function run() {
         }
       });
       port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看处理状态');}});
-      port.postMessage({type:'START_VIDEO_TASK',sourceUrl:pageUrl,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,selfHostedUrl:config.selfHostedApiUrl,selfHostedToken:config.selfHostedApiToken});
+      port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:pageUrl,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,selfHostedUrl:config.selfHostedApiUrl,selfHostedToken:config.selfHostedApiToken});
       handedOff=true; canClose=true;cancelBtn.style.display='';runBtn.disabled=true;setStatus('已移交后台；重新打开扩展可查看进度');return;
     }
 
@@ -356,6 +363,7 @@ async function run() {
 
       port.postMessage({
         type: 'START_TASK',
+        diagnosticId,
         sourceUrl: pageUrl,
         taskType: 'chatgpt',
         openerTabId: tab.id,
@@ -389,6 +397,7 @@ async function run() {
 
       port.postMessage({
         type: 'START_TASK',
+        diagnosticId,
         sourceUrl: pageUrl,
         taskType: 'selfhosted',
         openerTabId: tab.id,
@@ -417,6 +426,7 @@ async function run() {
 
       port.postMessage({
         type: 'START_TASK',
+        diagnosticId,
         sourceUrl: pageUrl,
         taskType: 'local',
         openerTabId: tab.id,
@@ -438,6 +448,7 @@ async function run() {
 
       port.postMessage({
         type: 'START_TASK',
+        diagnosticId,
         sourceUrl: pageUrl,
         taskType: 'aistudio',
         duration,
@@ -457,6 +468,7 @@ async function run() {
     handedOff = true;
     // Status will be updated by background notify messages
   } catch (e) {
+    diagnose('popup.failed',{errorName:e.name,category:'operation_failed'});
     showError(`错误：${e.message}`);
   } finally {
     if (!handedOff) {
@@ -486,6 +498,7 @@ runBtn.addEventListener('click', run);
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const pageUrl = tab.url || '';
+    popupDiagnostic(popupDiagnosticId,'popup.source',{},tab.id,pageUrl);
     currentPlatform=VidSiftPlatforms.identify(pageUrl)?.platform || '';
     const taskStatus = await getActiveTranscribeTask(tab.id);
     if (!VidSiftPlatforms.identify(pageUrl)) {
@@ -524,6 +537,7 @@ runBtn.addEventListener('click', run);
       updateUI();
     }
   } catch (e) {
+    popupDiagnostic(popupDiagnosticId,'popup.initialization_failed',{errorName:e.name,category:'operation_failed'});
     showError(`扩展初始化失败：${e.message}`);
     setStatus('请刷新视频页并重新打开扩展；若仍失败，请在扩展管理页重新加载通用总结扩展。');
     runBtn.disabled = true;

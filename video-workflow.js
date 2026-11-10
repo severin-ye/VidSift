@@ -11,11 +11,13 @@
    const d=this.deps,tabId=msg.openerTabId,source=d.identify(msg.sourceUrl);
    if(!source)throw new Error('当前页面不是支持的视频页面');
    if(this.tasks.has(tabId)||d.existing(tabId))throw new Error('当前视频已有任务进行中，请等待或取消');
-   const task={tabId,source,id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),cancelled:false,controller:new AbortController()};
+   const task={tabId,source,id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,cancelled:false,controller:new AbortController()};
    this.tasks.set(tabId,task);d.lock(tabId,'video','正在提取视频内容...');
+   const log=(stage,value)=>{try{d.diagnostic?.(task,stage,value);}catch{}};log('task.started');
    const status=(type,text)=>{d.lock(tabId,'video',text);notify(type,text);};let assets=[];
    try{
-    await this.assertLive(task);task.client=d.client();
+    await this.assertLive(task);log('source.checked');task.client=d.client();log('native.connected');
+    if(typeof task.client.request==='function'){try{const reply=await task.client.request('diagnostics');log('native.version',{nativeVersion:reply.result?.version||'unknown'});}catch{log('native.diagnostics_failed');}}
     let pageSource;
     if(source.platform==='douyin'&&d.snapshot){
      status('STATUS','正在读取当前抖音作品的原视频信息...');
@@ -23,7 +25,12 @@
      await this.assertLive(task);
      if(!pageSource)status('STATUS','当前页面未提供完整原视频地址，改用限时解析...');
     }
-    const result=await task.client.resolve({url:msg.sourceUrl,source:{...msg.source,...pageSource},forceAudio:!!msg.forceAudio,needAudio:true,audioSettings:d.normalizeAudio?d.normalizeAudio(msg.audioSettings):msg.audioSettings,screenshots:d.normalize(msg.screenshotSettings)},text=>status('STATUS',text));
+    log('native.resolve');
+    const result=await task.client.resolve({url:msg.sourceUrl,source:{...msg.source,...pageSource},forceAudio:!!msg.forceAudio,needAudio:true,audioSettings:d.normalizeAudio?d.normalizeAudio(msg.audioSettings):msg.audioSettings,screenshots:d.normalize(msg.screenshotSettings)},text=>{log('native.progress',{phase:/YouTube 字幕/.test(text)?'youtube_subtitle':/元数据/.test(text)?'metadata':/字幕轨道/.test(text)?'subtitle_tracks':/下载/.test(text)?'download':/压缩|编码/.test(text)?'encode':'processing'});status('STATUS',text);});
+    log('native.completed',{hasSubtitle:!!result.subtitle?.body?.length,subtitleCount:result.subtitle?.body?.length||0,hasAudio:!!result.audio,duration:result.duration,imageCount:result.images?.length||0,
+     subtitleStatus:result.subtitleStatus,originalBytes:result.audioInfo?.originalBytes,outputBytes:result.audioInfo?.outputBytes,
+     audioCandidateCount:result.audioInfo?.candidateCount,selectedSourceBytes:result.audioInfo?.selectedSourceBytes,
+     selectedSourceBitrate:result.audioInfo?.selectedSourceBitrate,audioSourceKind:result.audioInfo?.sourceKind});
     assets=[result.audio,...(result.images||[])].filter(Boolean).map(a=>a.assetId);
     if(result.audio&&d.normalizeAudio&&!result.audioInfo)throw new Error('本机媒体程序尚未支持音频设置，请更新到本包5.1.0本机程序后重试');
     await this.assertLive(task);
@@ -38,6 +45,7 @@
      if(!result.audio)throw new Error('未取得可用字幕或完整音频，请检查视频访问权限');
      status('STATUS','正在读取视频音频...');const audio=await task.client.readAsset(result.audio.assetId);await this.assertLive(task);
      if((msg.transcribeService||'aistudio')==='aistudio'){
+      log('aistudio.start');
       status('STATUS','正在后台转写音频，完成后自动交给 ChatGPT...');
       const transcription=await d.sendAIStudio({...common,audio,duration:result.duration,attachments:[audio,...attachments]});
       srt=transcription?.transcript;
@@ -48,14 +56,15 @@
      }
     }
     if(srt){
+     log('chatgpt.start');
      await this.assertLive(task);
      const name=(context.videoId+'_'+context.title).replace(/[\\/:*?"<>|]/g,'_').slice(0,160)+'.srt';
      const file={name,content:srt};
      await d.sendChatGPT({...common,file,attachments:[{name,mime:'text/plain',content:srt},...attachments]});
     }
     if(task.cancelled)throw new Error('视频处理已取消');
-    status('DONE','字幕/音频与所选图片已上传并发送。');return {ok:true,source:context,frameInfo:result.frameInfo};
-   }catch(e){status('ERROR',e.message);throw e;}
+    log('task.completed');status('DONE','字幕/音频与所选图片已上传并发送。');return {ok:true,source:context,frameInfo:result.frameInfo};
+   }catch(e){log('task.failed',{category:root.VidSiftDiagnostics?.category(e)||'operation_failed',errorName:e.name});status('ERROR',e.message);throw e;}
    finally{
     try{await task.client?.release(assets);}catch{}task.client?.close();
     this.tasks.delete(tabId);d.unlock(tabId);

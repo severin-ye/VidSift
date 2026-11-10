@@ -13,7 +13,7 @@ function harness() {
       if(selector==='button')return state.buttons;
       if(selector==='textarea')return [textarea];
       if(selector==='ms-chat-turn')return state.turns;
-      return state.cards;
+      state.cardSelector=selector; return state.cards;
     },
     querySelector(selector){return selector.includes('dialog')?state.dialog:null;}
   };
@@ -22,7 +22,7 @@ function harness() {
     chrome:{runtime:{onMessage:{addListener(fn){listener=fn;}}}}};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync('aistudio-transcript.js','utf8'),context);
-  const source=fs.readFileSync('aistudio-content.js','utf8').replace(/\}\)\(\);\s*$/, 'globalThis.api={findRunButton,attachmentState,typePrompt,clickRunButton,getPromptTextarea,waitForTranscript};})();');
+  const source=fs.readFileSync('aistudio-content.js','utf8').replace(/\}\)\(\);\s*$/, 'globalThis.api={findRunButton,attachmentState,typePrompt,clickRunButton,getPromptTextarea,waitForTranscript,getAttachmentCards,diagnosticDOM};})();');
   vm.runInContext(source,context);
   function button(label, options={}) {
     return {...options,textContent:options.text??label, disabled:options.disabled??false,
@@ -184,5 +184,36 @@ test('relay rejects explicit generation errors, incomplete output and cancellati
   if(mode==='cancel')h.cancel();
   await assert.rejects(h.api.waitForTranscript(new Set(),'task',10,3000),mode==='error'?/生成失败/:mode==='cancel'?/取消/:/完成标记/);
   assert.equal(h.sends,0);
+ }
+});
+
+function promptMediaCard({busy=false,error=false,tokens=true,remove=true,preview=true}={}) {
+ const removeButton={disabled:!remove,textContent:'close',getAttribute(key){return key==='aria-label'?'Remove media':key==='aria-disabled'?String(!remove):null;}};
+ return {textContent:'Generated Audio 62,574 tokenssettingsclose',getAttribute(){return null;},
+  matches(selector){return selector==='ms-prompt-media, [data-test-id="prompt-media-container"]';},
+  querySelector(selector){
+   if(busy&&selector.includes('progressbar'))return {};
+   if(error&&selector.includes('role="alert"'))return {};
+   if(selector==='ms-token-status [data-test-id="token-count"]')return tokens?{textContent:'62,574 tokens'}:null;
+   if(preview&&selector==='ms-prompt-audio, ms-prompt-video, audio')return {};
+   return null;
+  },querySelectorAll(){return [removeButton];}};
+}
+test('current prompt-media scoped tokens and enabled Remove confirm without a legacy audio renderer',()=>{
+ const h=harness(),card=promptMediaCard(),receipt={existing:new Set(),mime:'audio/mp4'};h.state.cards=[card];
+ assert.equal(h.api.attachmentState('audio.m4a',receipt).state,'confirmed');
+ assert.match(h.state.cardSelector,/ms-prompt-media/);assert.match(h.state.cardSelector,/data-test-id="prompt-media-container"/);
+ assert.equal(h.api.diagnosticDOM(receipt).hasTokenCount,true);
+ for(const [options,state] of [[{busy:true},'pending'],[{error:true},'failed'],[{tokens:false},'pending'],[{remove:false},'pending']]){
+  h.state.cards=[promptMediaCard(options)];assert.equal(h.api.attachmentState('audio.m4a',{existing:new Set(),mime:'audio/mp4'}).state,state);
+ }
+});
+test('only a pending receipt can reconcile one compatible new prompt-media node',()=>{
+ for(const mode of ['pending','confirmed','wrong-mime','multiple','preexisting']){
+  const h=harness(),first=promptMediaCard({busy:mode!=='confirmed'}),fresh=promptMediaCard();
+  const receipt={existing:new Set(mode==='preexisting'?[fresh]:[]),mime:mode==='wrong-mime'?'image/jpeg':'audio/mp4'};
+  h.state.cards=[first];h.api.attachmentState('audio.m4a',receipt);
+  h.state.cards=mode==='multiple'?[fresh,promptMediaCard()]:[fresh];
+  assert.equal(h.api.attachmentState('audio.m4a',receipt).state,mode==='pending'?'confirmed':'pending',mode);
  }
 });

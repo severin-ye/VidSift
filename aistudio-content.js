@@ -8,6 +8,72 @@
   let _taskActive = false;
   let _activeTaskId = null;
   const cancelledTasks = new Map();
+  // Diagnostics contain structural receipts only; never page text or task material.
+  const diagnosticTasks = new Map();
+  function diagnosticState(taskId) {
+    if (!taskId) return null;
+    if (!diagnosticTasks.has(taskId)) {
+      diagnosticTasks.set(taskId,{count:0,started:Date.now(),waits:new Map(),terminal:false});
+      if (diagnosticTasks.size > 20) diagnosticTasks.delete(diagnosticTasks.keys().next().value);
+    }
+    return diagnosticTasks.get(taskId);
+  }
+  function diagnostic(taskId, stage, details = {}, terminal = false) {
+    try {
+      const state = diagnosticState(taskId);
+      if (!state || state.terminal || state.count >= (terminal ? 100 : 98)) return;
+      state.count++; if (terminal) state.terminal = true;
+      Promise.resolve(chrome.runtime.sendMessage({type:'VIDSIFT_DIAGNOSTIC',taskId,stage:'aistudio.'+stage,
+        details:{...details,elapsedMs:Math.max(0,Date.now()-state.started)}})).catch(()=>{});
+    } catch (_) { /* Observability must never alter task execution. */ }
+  }
+  function diagnosticWait(taskId, stage, details) {
+    try {
+      const state=diagnosticState(taskId); if (!state) return;
+      const signature=JSON.stringify(details), previous=state.waits.get(stage), now=Date.now();
+      if (!previous || signature!==previous.signature || now-previous.at>=10000) {
+        state.waits.set(stage,{signature,at:now}); diagnostic(taskId,stage,details);
+      }
+    } catch (_) {}
+  }
+  function diagnosticLabels(buttons, kind) {
+    // A closed control vocabulary excludes filenames, titles, account text and URLs.
+    const words=kind==='play' ? /^(?:play|audio|file|pause|stop|space|播放|暂停|停止|音频|play_arrow|play_circle|play_circle_filled|pause_circle|pause_circle_filled)$/i : /^(?:run|prompt|send|settings|ctrl|enter|执行|运行|运行提示|发送|arrow_upward|arrow_forward|play_arrow|keyboard_return|subdirectory_arrow_left)$/i;
+    return Array.from(buttons || []).filter(visibleControl).map(controlLabel).map(label=>String(label).trim().replace(/\s+/g,' ')).filter(label=>
+      label.length>0 && label.length<=80 && label.split(/[\s()+↵⏎⌘]+/).filter(Boolean).every(word=>words.test(word))).slice(0,4);
+  }
+  function diagnosticDOM(receipt) {
+    try {
+      const cards=getAttachmentCards(), card=receipt?.card, audio=card?.querySelector('audio');
+      const buttons=Array.from(document.querySelectorAll('button'));
+      const playButtons=Array.from(card?.querySelectorAll?.('button') || []);
+      const run=findRunButton();
+      return {cardCount:cards.length,addedCardCount:receipt?.existing?cards.filter(item=>!receipt.existing.has(item)).length:0,
+        trackedCardPresent:!!card&&cards.includes(card),busy:!!card&&(!!card.matches?.('[role="progressbar"], [aria-busy="true"], mat-progress-spinner, mat-spinner, [class*="loading"]')||!!card.querySelector('[role="progressbar"], [aria-busy="true"], mat-progress-spinner, mat-spinner, [class*="loading"]')),
+        hasAudio:!!audio,audioReadyState:audio?Number(audio.readyState)||0:0,
+        hasTokenCount:!!card&&/(?:[1-9]\d*(?:[,，]\d{3})*(?:\.\d+)?)\s*(?:tokens?\b|个?词元)/i.test(card.querySelector('ms-token-status [data-test-id="token-count"]')?.textContent || card.textContent || ''),
+        playEnabled:playButtons.some(button=>visibleControl(button)&&isEnabled(button)&&diagnosticLabels([button],'play').length>0),
+        playControlLabels:diagnosticLabels(playButtons,'play'),runEnabled:!!isEnabled(run),runControlLabels:diagnosticLabels(buttons,'run')};
+    } catch (_) { return {}; }
+  }
+  function diagnosticError(error) {
+    let category='page_error';
+    try {
+      const message=String(error?.message||'');
+      if (/取消|停止发送旧|源视频已切换/.test(message)) category='cancelled';
+      else if (/上传状态未确认/.test(message)) category='upload_timeout';
+      else if (/上传失败/.test(message)) category='upload_failed';
+      else if (/运行按钮/.test(message)) category='run_not_found';
+      else if (/是否接受尚未确认/.test(message)) category='submission_unknown';
+      else if (/转写|字幕|SRT|音频首尾/.test(message)) category='transcript_incomplete';
+      else if (/加载超时/.test(message)) category='page_timeout';
+      return {category,errorName:['Error','TypeError','RangeError','DOMException','AbortError'].includes(error?.name)?error.name:'Error'};
+    } catch (_) { return {category,errorName:'Error'}; }
+  }
+  function diagnosticCancellation(reason) {
+    return /应答|传输/.test(reason||'')?'transfer_failed':/关闭/.test(reason||'')?'source_closed':/作品|源视频|网址/.test(reason||'')?'source_changed':/扩展中取消/.test(reason||'')?'explicit_cancel':'unspecified';
+  }
+
   function assertNotCancelled(taskId) { if (taskId && cancelledTasks.has(taskId)) throw new Error((cancelledTasks.get(taskId)||'任务已取消')+'，未自动发送'); }
   function reportTarget(msg, ok, error, payload = {}) { if (msg.taskId) chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok,...payload,...(error?{error}: {})}).catch(() => {}); }
 
@@ -97,16 +163,46 @@
   // --- Drop file onto prompt area ---
 
   function getAttachmentCards() {
-    const cards = Array.from(document.querySelectorAll('ms-file-chunk, ms-audio-chunk, ms-image-chunk, [data-testid="attachment"], .attachment-container, .file-container'));
+    const cards = Array.from(document.querySelectorAll('ms-prompt-media, [data-test-id="prompt-media-container"], ms-file-chunk, ms-audio-chunk, ms-image-chunk, [data-testid="attachment"], .attachment-container, .file-container'));
     // A renderer and its wrapper are one attachment, not two receipts.
     return cards.filter(card => !cards.some(other => other !== card && card.contains?.(other)));
+  }
+
+  function isPromptMediaCard(card) {
+    return !!card?.matches?.('ms-prompt-media, [data-test-id="prompt-media-container"]');
+  }
+
+  function compatiblePromptMedia(card, mime, fileName) {
+    if (!isPromptMediaCard(card)) return false;
+    const name=card.querySelector('.name');
+    if (name && (name.textContent || '').trim()===fileName) return true;
+    // AI Studio uses its video player for audio/video media previews as well.
+    if (mime?.startsWith('audio/')) return !!card.querySelector('ms-prompt-audio, ms-prompt-video, audio');
+    if (mime?.startsWith('video/')) return !!card.querySelector('ms-prompt-video, video');
+    if (mime?.startsWith('image/')) return !!card.querySelector('ms-prompt-image, img');
+    return false;
+  }
+
+  function promptMediaProcessed(card) {
+    if (!isPromptMediaCard(card)) return false;
+    const tokens=card.querySelector('ms-token-status [data-test-id="token-count"]');
+    const positiveTokens=!!tokens && /(?:[1-9]\d*(?:[,，]\d{3})*(?:\.\d+)?)\s*(?:tokens?\b|个?词元)/i.test(tokens.textContent || '');
+    const remove=Array.from(card.querySelectorAll?.('button') || []).some(button=>
+      visibleControl(button) && isEnabled(button) && /^(?:Remove media|移除媒体|删除媒体)$/i.test(controlLabel(button).trim()));
+    return positiveTokens && remove;
   }
 
   function attachmentState(fileName, receipt = new Set()) {
     const cards = getAttachmentCards();
     const existing = receipt.existing || receipt;
     let card = receipt.card;
-    if (card && !cards.includes(card)) return {state:'pending'};
+    if (card && !cards.includes(card)) {
+      // Reconcile only a pending upload's single replacement, never a confirmed
+      // receipt or an arbitrary pre-existing/ambiguous ready card.
+      const replacements=receipt.existing && !receipt.confirmed ? cards.filter(candidate=>!existing.has(candidate)) : [];
+      if (replacements.length!==1 || !compatiblePromptMedia(replacements[0],receipt.mime,fileName)) return {state:'pending'};
+      card=replacements[0]; receipt.card=card;
+    }
     if (!card) {
       const added = cards.filter(candidate => !existing.has(candidate));
       const named = added.filter(candidate => candidate.getAttribute('aria-label') === fileName ||
@@ -131,9 +227,12 @@
     // AI Studio may rename audio and render its own player without an HTML audio
     // element. A token count AND an available player are an explicit media receipt;
     // a filename, a token count alone, or an enabled Run button is insufficient.
+    // Current prompt-media has no play button: its scoped processed token count
+    // plus enabled Remove media action is the explicit receipt for that component.
     const ready = (image && image.complete && image.naturalWidth > 0) ||
-      (audio && audio.readyState >= 2) || (tokenCount && play) ||
+      (audio && audio.readyState >= 2) || (tokenCount && play) || promptMediaProcessed(card) ||
       ['ready','complete','uploaded'].includes(card.getAttribute('data-state'));
+    if (ready && receipt.existing) receipt.confirmed=true;
     return {state:ready ? 'confirmed' : 'pending',card};
   }
 
@@ -152,7 +251,8 @@
     while (Date.now() - start < timeout) {
       assertNotCancelled(taskId);
       const result = attachmentState(fileName, existing);
-      if (result.state === 'confirmed') return;
+      diagnosticWait(taskId,'attachment_state',{...diagnosticDOM(existing),state:result.state,attachmentIndex:existing.attachmentIndex ?? 0});
+      if (result.state === 'confirmed') { diagnostic(taskId,'attachment_ready',{...diagnosticDOM(existing),attachmentIndex:existing.attachmentIndex ?? 0}); return; }
       if (result.state === 'failed') throw Object.assign(new Error(`附件上传失败：${fileName}，未自动发送`), {retryable:true,tile:result.card});
       await sleep(500);
     }
@@ -214,18 +314,21 @@
 
   async function clickRunButton(timeout = 30000, taskId, verifyAttachments, acceptanceTimeout = 15000) {
     const start = Date.now();
+    diagnostic(taskId,'run_search',diagnosticDOM());
     while (Date.now() - start < timeout) {
       assertNotCancelled(taskId);
+      diagnosticWait(taskId,'run_wait',diagnosticDOM());
       if (verifyAttachments) verifyAttachments();
       const runBtn = findRunButton();
       if (isEnabled(runBtn)) {
         if (document.querySelector('[role="dialog"], mat-dialog-container')) throw new Error('AI Studio 有未关闭的对话框，未自动发送');
         const before = submissionSnapshot();
         assertNotCancelled(taskId);
+        diagnostic(taskId,'run_click',diagnosticDOM());
         runBtn.click();
         const clickedAt = Date.now();
         while (Date.now() - clickedAt < acceptanceTimeout) {
-          if (submissionAccepted(before)) return;
+          if (submissionAccepted(before)) { diagnostic(taskId,'run_accepted',diagnosticDOM()); return; }
           // Never click again, including after cancellation or an uncertain receipt.
           assertNotCancelled(taskId);
           await sleep(200);
@@ -254,6 +357,7 @@
   async function waitForTranscript(before, taskId, duration, timeout = 900000) {
     if (!globalThis.VidSiftTranscript) throw new Error('转写完整性校验组件未加载，未转交 GPT');
     const started = Date.now();
+    diagnostic(taskId,'transcript_wait',diagnosticDOM());
     let lastText = '', stableSince = started;
     while (Date.now() - started < timeout) {
       assertNotCancelled(taskId);
@@ -267,9 +371,12 @@
       const text = turn ? responseText(turn) : '';
       if (text !== lastText) { lastText = text; stableSince = Date.now(); }
       const generating = submissionSnapshot().stop.size > 0;
+      diagnosticWait(taskId,'transcript_state',{...diagnosticDOM(),generating,hasResponse:!!text});
       if (text && !generating && isEnabled(findRunButton()) && Date.now() - stableSince >= 1500) {
         assertNotCancelled(taskId);
-        return VidSiftTranscript.parse(text, duration);
+        const transcript = VidSiftTranscript.parse(text, duration);
+        diagnostic(taskId,'transcript_complete',{hasTranscript:!!transcript});
+        return transcript;
       }
       await sleep(250);
     }
@@ -294,14 +401,17 @@
   async function handleUploadAndRun(attachments, prompt, tempChat, bgOpen, videoTitle, bvid, biliTabId, taskId, {relayToChatGPT = false, duration} = {}) {
     setTempChat(!!tempChat);
     await typePrompt(prompt);
+    diagnostic(taskId,'prompt_filled',{promptFilled:true});
     reportTranscribeTaskEvent('status','AI Studio 提示词已填写，正在添加附件...',biliTabId);
     const receipts = [];
-    for (const attachment of attachments) {
+    for (const [attachmentIndex,attachment] of attachments.entries()) {
       assertNotCancelled(taskId);
       if (attachment.mime.startsWith('audio/') && VidSiftAttachments.toFile(attachment).size < 1024) throw new Error('音频数据异常，下载可能失败，已中止');
       showStatus(`正在上传并确认附件：${attachment.name}`);
       reportTranscribeTaskEvent('status', `正在上传附件：${attachment.name}`, biliTabId);
       const existing = await dropAttachment(attachment);
+      existing.attachmentIndex=attachmentIndex;
+      diagnostic(taskId,'attachment_drop',{...diagnosticDOM(existing),attachmentIndex,mime:/^(?:audio|image|text)\/[a-zA-Z0-9.+-]{1,40}$/.test(attachment.mime)?attachment.mime:'other'});
       try { await waitForFileAttached(attachment.name, existing, taskId); } catch (e) { e.attachment = attachment; throw e; }
       receipts.push({attachment,existing});
     }
@@ -470,11 +580,13 @@
   // --- Message listener ---
 
   function startUploadTask(msg) {
+      diagnostic(msg.taskId,'task_received');
       (async () => {
         try {
           showStatus('正在等待页面就绪...');
           reportTranscribeTaskEvent('status','AI Studio 已收到任务，正在等待提示词输入框...',msg.biliTabId);
           await waitForReady();
+          diagnostic(msg.taskId,'input_ready');
           reportTranscribeTaskEvent('status','AI Studio 输入框已就绪，正在准备提示词和附件...',msg.biliTabId);
           const attachments = VidSiftAttachments.normalizeMessage(msg, 'aistudio');
           const source = msg.source?.url || msg.sourceUrl || msg.bvid || msg.videoTitle;
@@ -487,8 +599,10 @@
             prompt += `\n\n本次自动转写协议：${knownDuration ? `音频实际时长为 ${duration} 秒；` : ''}请输出完整、按顺序编号且带毫秒时间戳的 SRT 字幕，只有全部音频已逐字转写后才在字幕之后单独输出 [转写完成 ${knownDuration ? clock : 'HH:MM:SS'}]。尾标时间必须对应完整音频时长；未完成、遇到错误或长度限制时不得伪造完成标记。`;
           }
           const payload = await handleUploadAndRun(attachments, prompt, msg.tempChat, msg.bgOpen, msg.videoTitle, msg.bvid, msg.biliTabId, msg.taskId, {relayToChatGPT:msg.relayToChatGPT === true,duration:msg.duration});
+          diagnostic(msg.taskId,'completed',{ok:true},true);
           reportTarget(msg, true, undefined, payload);
         } catch (e) {
+          diagnostic(msg.taskId,'failed',diagnosticError(e),true);
           showFailedAttachmentRetry(e);
           reportTarget(msg, false, e.message);
           console.error('AISTUDIO_UPLOAD_AND_RUN failed:', e);
@@ -510,7 +624,7 @@
 
     const transferReply = attachmentReceiver?.handle(msg);
     if (transferReply) { sendResponse(transferReply); return; }
-    if (msg.type === 'VIDSIFT_CANCEL_UPLOAD') { attachmentReceiver?.cancel(msg.taskId); cancelledTasks.set(msg.taskId,typeof msg.reason==='string'?msg.reason:'任务已取消'); sendResponse({ok:true}); return; }
+    if (msg.type === 'VIDSIFT_CANCEL_UPLOAD') { diagnostic(msg.taskId,'cancelled',{category:'cancelled',reasonCategory:diagnosticCancellation(msg.reason)},true); attachmentReceiver?.cancel(msg.taskId); cancelledTasks.set(msg.taskId,typeof msg.reason==='string'?msg.reason:'任务已取消'); sendResponse({ok:true}); return; }
     if (msg.type === 'VIDSIFT_AISTUDIO_UPLOAD_AND_RUN') {
       if (_taskActive) { sendResponse({ok:false,error:'已有附件任务正在处理'}); return; }
       _taskActive = true;

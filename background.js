@@ -1,5 +1,8 @@
 'use strict';
-importScripts('audio-settings.js','attachment-transfer.js','platforms.js','native-client.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js');
+importScripts('task-diagnostics.js','audio-settings.js','attachment-transfer.js','platforms.js','native-client.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js');
+
+const _diagnostics=VidSiftDiagnostics.create(chrome.storage?.local,{version:chrome.runtime.getManifest?.().version||'unknown'});
+function diagnoseTask(task,stage,details={}){try{if(stage==='task.started')_diagnostics.begin(task.id,{sourceTabId:task.tabId,platform:task.source.platform,videoId:task.source.videoId},task.diagnosticId);return _diagnostics.record(task.id,stage,details);}catch{return Promise.resolve(false);}}
 
 const _legacyGuard = new SourceGuard(id=>chrome.tabs.get(id), VidSiftPlatforms.identify);
 const _pageBridge = new PageBridge(chrome);
@@ -819,9 +822,10 @@ chrome.runtime.onConnect.addListener((port) => {
     let legacy;
     try {
       legacy=_legacyGuard.begin(msg.biliTabId,msg.sourceUrl);
+      legacy.diagnosticId=msg.diagnosticId;diagnoseTask(legacy,'task.started');
       await _legacyGuard.check(legacy);
       keepLockUntilContentCompletes = await handleTask(msg, notify, legacy) === true;
-    } catch(e){ notify('ERROR',e.message); } finally {
+    } catch(e){ if(legacy)diagnoseTask(legacy,'task.failed',{category:VidSiftDiagnostics.category(e),errorName:e.name});else _diagnostics.record(msg.diagnosticId,'task.start_failed',{category:VidSiftDiagnostics.category(e),errorName:e.name});notify('ERROR',e.message); } finally {
       if(legacy && !keepLockUntilContentCompletes) finishLegacyTask(legacy);
       if (!legacy && _isAudioTranscribeTask(msg.taskType)) {
         _clearActiveTranscribeTask(msg.biliTabId);

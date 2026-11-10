@@ -1,7 +1,8 @@
 [CmdletBinding(SupportsShouldProcess=$true)]
-param([Parameter(Mandatory=$true)][string]$ProjectRoot,[string]$Version='5.1.1',[string]$InstallRoot=(Join-Path $env:LOCALAPPDATA 'VidSift'),[string]$RegistryStatePath,[switch]$DryRun)
+param([Parameter(Mandatory=$true)][string]$ProjectRoot,[string]$Version,[string]$InstallRoot=(Join-Path $env:LOCALAPPDATA 'VidSift'),[string]$RegistryStatePath,[switch]$DryRun)
 . (Join-Path $PSScriptRoot 'NativeHost.Common.ps1')
 $ProjectRoot=[IO.Path]::GetFullPath($ProjectRoot);$InstallRoot=[IO.Path]::GetFullPath($InstallRoot)
+if(!$PSBoundParameters.ContainsKey('Version')){$Version=([IO.File]::ReadAllText((Join-Path $ProjectRoot 'package.json'))|ConvertFrom-Json).version}
 if($Version -notmatch '^\d+\.\d+\.\d+$'){throw 'Version must be numeric x.y.z'}
 $runtime=Join-Path $InstallRoot 'runtime'
 # Every installation gets a new immutable release and dependency environment;

@@ -5,12 +5,14 @@ const _targetSourceTabs=new Map();
 const _targetDiagnostics=new Map();
 function recordTargetPhase(task,tab,phase){
  if(task.cancelled)return;
+ diagnoseTask(task,'target.'+phase,{targetTabId:tab.id,active:tab.active===true});
  const record={taskId:task.id,sourceTabId:task.tabId,targetTabId:tab.id,phase,at:Date.now(),
   extensionVersion:chrome.runtime.getManifest?.().version||'unknown',observedActive:tab.active===true};
  _targetDiagnostics.set(task.id,record);if(_targetDiagnostics.size>20)_targetDiagnostics.delete(_targetDiagnostics.keys().next().value);
  chrome.storage?.local?.set({vidsiftLastTargetDiagnostic:record}).catch(()=>{});
 }
 function recordTargetCancellation(task){
+ diagnoseTask(task,'task.cancelled',{category:'cancelled',reasonCategory:VidSiftDiagnostics.cancelReason(task.cancelReason)});
  const previous=_targetDiagnostics.get(task.id)||{taskId:task.id,sourceTabId:task.tabId,targetTabId:task.targetTabId};
  const record={...previous,phase:'cancelled',at:Date.now(),cancelReason:task.cancelReason,sourceKey:task.source.key,currentSourceKey:task.cancelSourceKey??null,extensionVersion:chrome.runtime.getManifest?.().version||'unknown'};
  _targetDiagnostics.set(task.id,record);chrome.storage?.local?.set({vidsiftLastTargetDiagnostic:record}).catch(()=>{});
@@ -25,6 +27,7 @@ async function verifySourceChange(task){
 }
 function waitForTarget(task,tabId){
  task.targetTabId=tabId;_targetSourceTabs.set(tabId,task.tabId);
+ diagnoseTask(task,'target.registered',{targetTabId:tabId});
  return new Promise((resolve,reject)=>{
   // Only active target jobs keep the worker alive; ordinary popup ports do not.
   const pulse=setInterval(()=>{chrome.runtime.getPlatformInfo?.().catch(()=>{});},20000);
@@ -76,6 +79,7 @@ async function transcribeVideo(audio,data,notify,signal){
  return VidSiftPlatforms.readTranscription(response,notify);
 }
 const _videoWorkflow=new VideoWorkflow({
+ diagnostic:diagnoseTask,
  identify:VidSiftPlatforms.identify,toSrt:VidSiftPlatforms.toSrt,normalize:ScreenshotSettings.normalize,normalizeAudio:AudioSettings.normalize,
  getTab:id=>chrome.tabs.get(id),client:()=>new NativeMediaClient(),existing:_getActiveTranscribeTask,
  snapshot:async task=>{
@@ -101,9 +105,19 @@ chrome.runtime.onConnect.addListener(port=>{
  });
 });
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
+ if(msg.type==='VIDSIFT_DIAGNOSTIC_START'){
+  if(sender.tab||!sender.url?.endsWith('/popup.html')){sendResponse({ok:false});return false;}
+  _diagnostics.begin(msg.taskId,{sourceTabId:msg.sourceTabId,...(VidSiftPlatforms.identify(msg.sourceUrl)||{})}).then(()=>_diagnostics.record(msg.taskId,msg.stage||'popup.clicked',msg.details)).then(ok=>sendResponse({ok}));return true;
+ }
+ if(msg.type==='VIDSIFT_DIAGNOSTIC'){
+  const fromPopup=!sender.tab&&sender.url?.endsWith('/popup.html');
+  if(!fromPopup&&!/^aistudio\./.test(msg.stage||'')){sendResponse({ok:false});return false;}
+  if(!fromPopup&&!sender.tab){sendResponse({ok:false});return false;}
+  _diagnostics.record(msg.taskId,msg.stage,msg.details,fromPopup?undefined:sender.tab.id).then(ok=>sendResponse({ok}));return true;
+ }
  if(msg.type==='VIDSIFT_TARGET_DONE'){
   const target=_targetCompletions.get(msg.taskId);
-  if(target&&target.tabId===sender.tab?.id){if(msg.ok)target.resolve({transcript:msg.transcript});else target.reject(new Error(msg.error||'目标页面上传失败'));}
+  if(target&&target.tabId===sender.tab?.id){_diagnostics.record(msg.taskId,msg.ok?'target.completed':'target.failed',{accepted:!!msg.ok,category:msg.ok?'success':VidSiftDiagnostics.category(msg.error)},sender.tab.id);if(msg.ok)target.resolve({transcript:msg.transcript});else target.reject(new Error(msg.error||'目标页面上传失败'));}
   sendResponse({ok:!!target});return false;
  }
  if(msg.type==='CANCEL_VIDEO_TASK'){

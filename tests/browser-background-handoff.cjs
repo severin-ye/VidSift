@@ -102,6 +102,10 @@ let context, worker, control, source;
   assert.match(await taskPopup.locator('#statusText').textContent(),/ChatGPT/);
   assert.equal(await taskPopup.locator('#runBtn').isDisabled(),true);
   report.checks.push('popup opened on AI Studio resolves retained video task result instead of unsupported-page message');
+  const journal=await worker.evaluate(async()=>{await _diagnostics.flush();return (await chrome.storage.local.get(VidSiftDiagnostics.KEY))[VidSiftDiagnostics.KEY];});
+  const stages=journal.tasks.flatMap(task=>task.events.map(event=>event.stage));
+  for(const stage of ['task.started','target.task-accepted','aistudio.attachment_ready','aistudio.run_click','aistudio.run_accepted','aistudio.transcript_complete','target.completed'])assert.ok(stages.includes(stage),'Missing persistent stage: '+stage);
+  report.diagnosticStages=stages;report.checks.push('real extension messages persist attachment, Run, transcript and target receipts');
   report.passed = true;
 })().catch(error => { report.passed = false; report.error = error.stack; process.exitCode = 1; })
   .finally(async () => {

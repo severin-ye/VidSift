@@ -99,12 +99,73 @@ def validate_douyin_media_url(value):
         parsed = urlparse(value if isinstance(value, str) else '')
         domains = ('douyinvod.com', 'douyin.com', 'zjcdn.com', 'bytecdn.cn', 'ibytedtos.com', 'byteimg.com', 'pstatp.com')
         hostname = (parsed.hostname or '').lower()
-        valid = parsed.scheme == 'https' and parsed.username is None and parsed.password is None and parsed.port in (None, 443) and any(hostname == d or hostname.endswith('.' + d) for d in domains)
+        valid = isinstance(value, str) and len(value) < 8192 and parsed.scheme == 'https' and parsed.username is None and parsed.password is None and parsed.port in (None, 443) and any(hostname == d or hostname.endswith('.' + d) for d in domains)
     except ValueError:
         valid = False
     if not valid:
         raise ValueError('抖音原视频资源地址未通过 HTTPS 和平台 CDN 校验')
     return value
+
+
+def positive_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0
+
+
+def douyin_audio_candidates(resource, duration):
+    values = resource.get('audioCandidates', [])
+    if not isinstance(values, list) or len(values) > 12:
+        raise ValueError('抖音音轨候选数量或格式无效')
+    result = []
+    for entry in values:
+        if not isinstance(entry, dict) or not isinstance(entry.get('urls'), list) or not 1 <= len(entry['urls']) <= 3:
+            raise ValueError('抖音音轨备用地址格式无效')
+        urls = list(dict.fromkeys(validate_douyin_media_url(u) for u in entry['urls']))
+        for key in ('size', 'bitrate'):
+            if key in entry and not positive_number(entry[key]):
+                raise ValueError('抖音音轨大小或码率无效')
+        size, bitrate = entry.get('size'), entry.get('bitrate')
+        expected = size or (bitrate * duration / 8 if bitrate else None)
+        if expected is not None and not positive_number(expected):
+            raise ValueError('抖音音轨预计大小无效')
+        result.append({'urls': urls, 'size': size, 'bitrate': bitrate, 'expectedBytes': expected, 'sizeBasis': 'metadata' if size else 'estimate' if bitrate else 'unknown'})
+    if not result and resource.get('audioUrl') is not None:
+        result = [{'urls': [validate_douyin_media_url(resource['audioUrl'])], 'size': None, 'bitrate': None, 'expectedBytes': None, 'sizeBasis': 'unknown'}]
+    return sorted(result, key=lambda v: v['expectedBytes'] if v['expectedBytes'] is not None else math.inf)
+
+
+def subtitle_body(raw, ext):
+    """Normalize bounded platform caption data; never treat arbitrary text as cues."""
+    if isinstance(raw, str):
+        if len(raw.encode('utf-8')) > 4 * MAX_MESSAGE:
+            return []
+        if ext in ('json', 'json3'):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                return []
+        else:
+            cues = []
+            pattern = r'(?m)^(?:(\d{1,3}):)?(\d{2}):(\d{2})[.,](\d{3})[ \t]*-->[ \t]*(?:(\d{1,3}):)?(\d{2}):(\d{2})[.,](\d{3})[^\n]*\n([\s\S]*?)(?=\n[ \t]*\n|\Z)'
+            for m in re.finditer(pattern, raw.replace('\r\n', '\n')):
+                v=m.groups(); start=int(v[0] or 0)*3600+int(v[1])*60+int(v[2])+int(v[3])/1000; end=int(v[4] or 0)*3600+int(v[5])*60+int(v[6])+int(v[7])/1000
+                if int(v[1]) < 60 and int(v[2]) < 60 and int(v[5]) < 60 and int(v[6]) < 60:
+                    cues.append({'from':start,'to':end,'content':html.unescape(re.sub(r'<[^>]+>', '', v[8])).strip()})
+            raw={'body':cues}
+    if not isinstance(raw, dict):
+        return []
+    body=raw.get('body')
+    if not isinstance(body, list):
+        if isinstance(raw.get('utterances'), list):
+            body=[{'from':v.get('start_time', -1)/1000,'to':v.get('end_time', -1)/1000,'content':v.get('text')} for v in raw['utterances'][:10000] if isinstance(v, dict) and isinstance(v.get('start_time'), (int,float)) and isinstance(v.get('end_time'), (int,float))]
+        else:
+            body=[{'from':e.get('tStartMs',0)/1000,'to':(e.get('tStartMs',0)+e.get('dDurationMs',0))/1000,'content':''.join(v.get('utf8','') for v in e.get('segs',[]) if isinstance(v,dict) and isinstance(v.get('utf8',''),str))} for e in raw.get('events',[])[:10000] if isinstance(e,dict) and isinstance(e.get('tStartMs',0),(int,float)) and isinstance(e.get('dDurationMs',0),(int,float))]
+    result=[]
+    for cue in body[:10000]:
+        if not isinstance(cue,dict): continue
+        start,end,text=cue.get('from'),cue.get('to'),cue.get('content')
+        if isinstance(start,(int,float)) and not isinstance(start,bool) and math.isfinite(start) and start>=0 and positive_number(end) and end>start and isinstance(text,str) and text.strip():
+            result.append({'from':start,'to':end,'content':text.strip()[:8192]})
+    return result
 
 
 def douyin_browser_source(source, url):
@@ -126,6 +187,23 @@ def douyin_browser_source(source, url):
     info = {'id': match.group(1), 'title': title.strip(), 'duration': duration, '_douyin_video_url': validate_douyin_media_url(resource.get('videoUrl'))}
     if resource.get('audioUrl') is not None:
         info['_douyin_audio_url'] = validate_douyin_media_url(resource['audioUrl'])
+    candidates = douyin_audio_candidates(resource, duration)
+    if candidates:
+        info['_douyin_audio_candidates'] = candidates
+        info['_douyin_audio_url'] = candidates[0]['urls'][0]
+    tracks = resource.get('subtitleTracks', [])
+    if not isinstance(tracks, list) or len(tracks) > 12:
+        raise ValueError('抖音字幕候选格式无效')
+    info['subtitles'] = {}
+    for track in tracks:
+        if not isinstance(track, dict) or track.get('ext') not in ('srt', 'vtt', 'json', 'json3'):
+            raise ValueError('抖音字幕轨道格式无效')
+        address = validate_douyin_media_url(track.get('url'))
+        language = track.get('language', 'und')
+        if not isinstance(language, str) or len(language) > 32:
+            raise ValueError('抖音字幕语言格式无效')
+        info['subtitles'].setdefault(language, []).append({'url': address, 'ext': track['ext']})
+    info['_subtitle_status'] = 'unknown'
     return info
 
 
@@ -301,7 +379,10 @@ class Job:
         flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
         with self.lock:
             self.check()
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags, start_new_session=os.name != 'nt')
+            # Child tools never consume Native Messaging input. On Windows,
+            # inheriting that pipe can block child Python startup while the
+            # host's main thread is waiting for the next protocol message.
+            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags, start_new_session=os.name != 'nt')
             self.process = process
         start = time.monotonic()
         try:
@@ -397,7 +478,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.1.1', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.2.4', 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
@@ -518,19 +599,34 @@ class Service:
         tracks.update(info.get('automatic_captions') or {})
         tracks.update(info.get('subtitles') or {})
         languages = sorted(tracks, key=lambda lang: (not lang.lower().startswith('zh'), lang != 'en', lang))
-        for lang in languages:
-            choices = sorted(tracks[lang], key=lambda t: t.get('ext') != 'json3')
-            for track in choices:
-                if track.get('ext') not in ('json3', 'json'):
+        attempts = 0
+        for lang in languages[:12]:
+            for track in sorted(tracks[lang], key=lambda t: t.get('ext') != 'json3')[:12]:
+                if track.get('ext') not in ('json3', 'json', 'srt', 'vtt'):
                     continue
                 job.check()
                 try:
-                    with urlopen(Request(track['url'], headers={'User-Agent': 'Mozilla/5.0'}), timeout=25) as response:
-                        raw = json.loads(response.read(4 * MAX_MESSAGE))
-                    if 'body' in raw:
-                        body = raw['body']
+                    if isinstance(track.get('data'), str):
+                        raw = track['data']
                     else:
-                        body = [{'from': e.get('tStartMs', 0) / 1000, 'to': (e.get('tStartMs', 0) + e.get('dDurationMs', 0)) / 1000, 'content': ''.join(s.get('utf8', '') for s in e.get('segs', []))} for e in raw.get('events', []) if e.get('segs')]
+                        attempts += 1
+                        if attempts > 6:
+                            return None
+                        address = track['url']
+                        if info.get('_douyin_video_url'):
+                            validate_douyin_media_url(address)
+                            opener = build_opener(DouyinMediaRedirect())
+                            response = opener.open(Request(address, headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.douyin.com/'}), timeout=10)
+                        else:
+                            response = urlopen(Request(address, headers={'User-Agent': 'Mozilla/5.0'}), timeout=25)
+                        with response:
+                            if info.get('_douyin_video_url'):
+                                validate_douyin_media_url(response.geturl())
+                            payload = response.read(4 * MAX_MESSAGE + 1)
+                            if len(payload) > 4 * MAX_MESSAGE:
+                                continue
+                            raw = payload.decode('utf-8-sig')
+                    body = subtitle_body(raw, track['ext'])
                     if body:
                         return {'body': body, 'lan': lang}
                 except Exception:
@@ -611,15 +707,27 @@ class Service:
             audio_url = source.get('audioUrl')
             if audio_url is not None:
                 validate_douyin_media_url(audio_url)
-            if audio_url and not video:
-                try:
-                    return self.download_douyin_media(audio_url, task, job, progress, audio=True)
-                except Cancelled:
-                    raise
-                except Exception:
-                    job.check()
-                    if progress:
-                        progress('完整音轨直连下载未完成，正在改用原视频音轨')
+            candidates = douyin_audio_candidates(source, float(source.get('duration') or 1))
+            if candidates and not video:
+                attempts = 0
+                for candidate in candidates:
+                    for address in candidate['urls']:
+                        if attempts >= 3:
+                            break
+                        attempts += 1
+                        try:
+                            output = self.download_douyin_media(address, task, job, progress, audio=True)
+                            (task / 'audio-choice.json').write_text(json.dumps({'candidateCount': len(candidates), 'selectedSourceBytes': candidate.get('size'), 'selectedSourceBitrate': candidate.get('bitrate'), 'sourceKind': 'independent-audio', 'selectedSizeBasis': candidate.get('sizeBasis')}), encoding='utf-8')
+                            return output
+                        except Cancelled:
+                            raise
+                        except Exception:
+                            job.check()
+                    if attempts >= 3:
+                        break
+                if progress:
+                    progress('完整音轨的本轮备用来源未下载成功，正在改用原视频音轨')
+            (task / 'audio-choice.json').write_text(json.dumps({'candidateCount': len(candidates), 'selectedSourceBytes': None, 'selectedSourceBitrate': None, 'sourceKind': 'video'}), encoding='utf-8')
             try:
                 return self.download_douyin_media(media_url, task, job, progress)
             except Cancelled:
@@ -743,6 +851,9 @@ class Service:
                 url = candidate
             force = request.get('forceAudio') is True
             subtitle = None if force else source.get('subtitle')
+            if platform == 'douyin' and subtitle:
+                body = subtitle_body(subtitle, 'json')
+                subtitle = {'body': body, 'lan': subtitle.get('lan', 'und')} if body else None
             info = douyin_browser_source(source, url) if platform == 'douyin' else None
             browser_resource = info is not None
             info = info or {}
@@ -785,18 +896,20 @@ class Service:
                     progress('正在检查平台提供的字幕轨道')
                     subtitle = self.subtitle_fallback(info, job)
             if info.get('_douyin_video_url'):
-                media_source = {'url': info['_douyin_video_url']}
+                media_source = {'url': info['_douyin_video_url'], 'duration': duration}
+                if info.get('_douyin_audio_candidates'):
+                    media_source['audioCandidates'] = info['_douyin_audio_candidates']
                 if info.get('_douyin_audio_url'):
                     media_source['audioUrl'] = info['_douyin_audio_url']
                 (task / 'douyin-source.json').write_text(json.dumps(media_source), encoding='utf-8')
-            result = {'platform': platform, 'videoId': video_id, 'title': str(source.get('title') or info.get('title') or video_id), 'duration': duration, 'subtitle': subtitle, 'audio': None, 'images': [], 'frameInfo': {'mode': 'disabled', 'interval': settings.interval, 'frameCount': 0, 'collageCount': 0}, 'warnings': warnings}
+            result = {'subtitleStatus': 'available' if subtitle else info.get('_subtitle_status', 'unknown'), 'platform': platform, 'videoId': video_id, 'title': str(source.get('title') or info.get('title') or video_id), 'duration': duration, 'subtitle': subtitle, 'audio': None, 'images': [], 'frameInfo': {'mode': 'disabled', 'interval': settings.interval, 'frameCount': 0, 'collageCount': 0}, 'warnings': warnings}
             need_audio = force or (request.get('needAudio') is True and not subtitle)
             if (settings.enabled or need_audio) and duration <= 0:
                 raise ValueError('无法确认视频时长，已停止下载；暂不支持直播或时长未知的视频')
             audio_settings = normalize_audio_settings(request.get('audioSettings'))
             selector, selection_note = audio_format_selector(audio_settings['sourceBitrate'], info.get('formats'))
             if platform == 'douyin':
-                selection_note = '使用平台提供的完整口播音轨；未核实更小完整候选' if info.get('_douyin_audio_url') else '平台未提供可用独立完整音轨，下载原视频提取口播'
+                selection_note = '按平台完整口播候选的大小选择来源；缺少实际大小时按码率估算' if info.get('_douyin_audio_url') else '未取得可用独立完整音轨，下载原视频提取口播；其它来源是否存在未知'
             if settings.enabled:
                 selection_note = '图片提取需要下载原视频；音频压缩只减少上传体积'
             (task / 'audio-selection.json').write_text(json.dumps({'selector': selector}), encoding='utf-8')
@@ -818,7 +931,8 @@ class Service:
                 conversion, _ = job.run(command)
                 actual_duration = validate_audio_duration(conversion, duration)
                 result['audio'] = self.store.add(output, 'audio/mp4')
-                result['audioInfo'] = {'originalBytes': original_bytes, 'outputBytes': output.stat().st_size, 'duration': actual_duration, 'settings': audio_settings, 'sourceSelection': selection_note}
+                choice = json.loads((task / 'audio-choice.json').read_text(encoding='utf-8')) if (task / 'audio-choice.json').exists() else {}
+                result['audioInfo'] = {**choice, 'originalBytes': original_bytes, 'outputBytes': output.stat().st_size, 'duration': actual_duration, 'settings': audio_settings, 'sourceSelection': selection_note}
                 progress(f'原始下载 {original_bytes / 1048576:.2f} MB → 上传音频 {output.stat().st_size / 1048576:.2f} MB；{selection_note}')
             if settings.enabled:
                 result['images'], result['frameInfo'] = self.screenshots(video, duration, settings, task, job, progress, warnings)

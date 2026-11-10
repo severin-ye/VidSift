@@ -15,6 +15,7 @@ function fixture({ rejectPulse = false } = {}) {
     return id;
   };
   const context = vm.createContext({
+    diagnoseTask() {},
     chrome: { runtime: { getPlatformInfo() {
       pulses++;
       return rejectPulse ? Promise.reject(new Error('synthetic API failure')) : Promise.resolve({ os: 'win' });
