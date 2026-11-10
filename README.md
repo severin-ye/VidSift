@@ -1,13 +1,52 @@
-# 知行视频总结 · VidSift
+<p align="center">
+  <img src="./icons/logo-a3-master.png" alt="知行视频总结 Logo：黑色资料卡与橙色摘要卡" width="180">
+</p>
 
-**把视频里的内容交给 AI，整理成可以回看的知识笔记。**
+<h1 align="center">知行视频总结 · VidSift</h1>
 
-- VidSift 是面向 B站、YouTube 和抖音的浏览器扩展，会优先提取已有字幕，没有字幕时使用音频转写，再交给 ChatGPT 整理。
-- 你可以开启图片提取，把带时间戳的视频画面拼图一起发送，辅助理解课件、演示和图表。
-- 扩展使用你已登录的 ChatGPT / Google AI Studio 网页，默认网页流程不需要填写 API Key，但需要能访问对应服务并登录账号。
+<p align="center">
+  <strong>从视频到笔记，让知识留下来。</strong>
+</p>
+
+<p align="center">
+  提取 B站、YouTube、抖音的字幕或音频，交给 ChatGPT 整理。<br>
+  按需附上带时间戳的画面拼图，把课件、演示和图表一起纳入理解。
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Chrome%20%2F%20Edge-Manifest%20V3-4285F4?style=flat-square" alt="Chrome / Edge · Manifest V3">
+  <img src="https://img.shields.io/badge/status-experimental-orange?style=flat-square" alt="测试阶段">
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License"></a>
+</p>
+
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#使用方式">使用方式</a> ·
+  <a href="./INSTALL.md">完整安装说明</a> ·
+  <a href="./PRIVACY_POLICY.md">隐私说明</a> ·
+  <a href="./CHANGELOG.md">更新记录</a>
+</p>
+
 - **当前处于测试阶段**，部分真实网站流程仍待验收，本机程序目前提供 Windows 安装脚本。
+- 默认流程使用你已登录的 ChatGPT / Google AI Studio 网页，不需要填写 API Key，但需要能访问对应服务并登录账号。
 
-[快速开始](#快速开始) · [使用方式](#使用方式) · [完整安装说明](INSTALL.md) · [隐私说明](PRIVACY_POLICY.md) · [更新记录](CHANGELOG.md)
+---
+
+## 为什么做这个扩展
+
+- 看完一段课程、访谈或演示后，想留下可回看的笔记，往往还要手动找字幕、转写音频、截取画面，再把材料交给 AI。
+- 知行视频总结把这些步骤串在一起，让你从视频页面发起一次任务，再到 ChatGPT 查看整理结果。
+
+```text
+有字幕的视频 → 提取字幕 → ChatGPT 整理
+无字幕的视频 → 获取音频 → 转写为 SRT → ChatGPT 整理
+需要参考画面 → 开启图片提取 → 带时间戳的拼图随内容上传
+```
+
+- 例如，整理一段没有字幕的课程时，默认先由 AI Studio 生成完整逐字稿，再交给 ChatGPT 按你的提示词整理知识点和论证关系。
+- 你可以分别修改转写和总结提示词，笔记的准确性与完整性仍需要对照原视频核查。
+
+---
 
 ## 能做什么
 
