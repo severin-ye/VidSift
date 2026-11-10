@@ -82,6 +82,8 @@
         "https://www.bilibili.com/list/*"
       ],
       "js": [
+        "task-diagnostics.js",
+        "error-reporter.js",
         "bilibili-content.js"
       ],
       "run_at": "document_idle"
@@ -92,6 +94,9 @@
         "https://chat.openai.com/*"
       ],
       "js": [
+        "task-diagnostics.js",
+        "error-reporter.js",
+        "conversation-binding.js",
         "attachment-utils.js",
         "chatgpt-content.js"
       ]
@@ -101,6 +106,8 @@
         "https://aistudio.google.com/*"
       ],
       "js": [
+        "task-diagnostics.js",
+        "error-reporter.js",
         "attachment-utils.js",
         "aistudio-transcript.js",
         "attachment-transfer.js",
@@ -115,6 +122,8 @@
         "https://www.douyin.com/*"
       ],
       "js": [
+        "task-diagnostics.js",
+        "error-reporter.js",
         "platforms.js",
         "platform-content.js"
       ],

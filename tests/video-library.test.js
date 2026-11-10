@@ -2,6 +2,13 @@ const {test}=require('node:test');const assert=require('node:assert/strict');
 const lib=require('../video-library.js');
 const ID='11111111-2222-4333-8444-555555555555';
 const source={url:'https://www.bilibili.com/video/BV1xx411c7mD/?p=2&spm_id_from=share',title:'视频',coverUrl:'https://i0.hdslb.com/test.jpg',platform:'bilibili',videoId:'BV1xx411c7mD'};
+
+test('library delivery failures reach the diagnostics sink without losing the pending record',async()=>{
+ const f=fixture(),errors=[];f.api.runtime.sendMessage=async()=>{throw Error('receiver unavailable');};
+ const bridge=new lib.VideoLibraryBridge(f.api,{onError:error=>errors.push(error.message)});
+ await bridge.register({taskId:'failure',tabId:1,source,tempChat:false});await bridge.submitted('failure',{tab:{id:1}});await bridge.confirmed('failure',{tab:{id:1}},'https://chatgpt.com/c/'+ID);await bridge.drain();
+ assert.deepEqual(errors,['receiver unavailable']);assert.equal((await bridge.read()).pending.length,1);
+});
 function fixture(){let values={};const sent=[];return {sent,values,api:{runtime:{sendMessage:async(id,msg)=>{sent.push({id,msg});return msg.type==='ZHIXING_VIDSIFT_HELLO'?{ok:true,protocol:'zhixing-video-library',version:1}:{ok:true,id:msg.record.id};}},storage:{local:{get:async(keys)=>Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,values[k]])),set:async(v)=>Object.assign(values,structuredClone(v))}},tabs:{get:async id=>({id,url:`https://chatgpt.com/c/${ID}`})}}};}
 test('stable conversation identity rejects temporary, foreign and credential URLs',()=>{
  assert.equal(lib.conversationUrl(`https://chatgpt.com/c/${ID}?x=1`),`https://chatgpt.com/c/${ID}`);

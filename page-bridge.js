@@ -1,9 +1,9 @@
 (function(root){
  'use strict';
  const configurations={
-  bilibili:{name:'B站音频下载脚本',ping:'VIDSIFT_BILI_PING',files:['bilibili-content.js'],main:['bilibili-content-main.js'],accept:u=>u.protocol==='https:'&&u.hostname==='www.bilibili.com'&&(/^\/video\/BV\w+/.test(u.pathname)||u.pathname.startsWith('/list/'))},
-  chatgpt:{name:'ChatGPT上传脚本',ping:'VIDSIFT_CHATGPT_PING',main:['chatgpt-library-main.js'],files:['attachment-utils.js','chatgpt-content.js'],accept:u=>u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)},
-  aistudio:{name:'AI Studio上传脚本',ping:'VIDSIFT_AISTUDIO_PING',files:['attachment-utils.js','aistudio-transcript.js','attachment-transfer.js','aistudio-content.js'],accept:u=>u.protocol==='https:'&&u.hostname==='aistudio.google.com'}
+  bilibili:{name:'B站音频下载脚本',ping:'VIDSIFT_BILI_PING',files:['task-diagnostics.js','error-reporter.js','bilibili-content.js'],main:['bilibili-content-main.js'],accept:u=>u.protocol==='https:'&&u.hostname==='www.bilibili.com'&&(/^\/video\/BV\w+/.test(u.pathname)||u.pathname.startsWith('/list/'))},
+  chatgpt:{name:'ChatGPT上传脚本',ping:'VIDSIFT_CHATGPT_PING',main:['chatgpt-library-main.js'],files:['task-diagnostics.js','error-reporter.js','conversation-binding.js','attachment-utils.js','chatgpt-content.js'],accept:u=>u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)},
+  aistudio:{name:'AI Studio上传脚本',ping:'VIDSIFT_AISTUDIO_PING',files:['task-diagnostics.js','error-reporter.js','attachment-utils.js','aistudio-transcript.js','attachment-transfer.js','aistudio-content.js'],accept:u=>u.protocol==='https:'&&u.hostname==='aistudio.google.com'}
  };
  class PageBridge{
   constructor(api){this.api=api;this.pending=new Map();}
@@ -29,7 +29,7 @@
   async repair(tabId,kind){
    const config=configurations[kind];if(!config)throw new Error('不支持的页面连接类型');
    const valid=async()=>{const tab=await this.api.tabs.get(tabId);let u;try{u=new URL(tab.url);}catch{}if(!u||!config.accept(u))throw new Error(config.name+'对应页面已切换或转到登录页，请在正确页面完成登录后重试');};
-   const ping=async()=>{try{const r=await this.api.tabs.sendMessage(tabId,{type:config.ping},{frameId:0});if(kind==='aistudio'&&r?.ok&&r.component===kind&&!r.attachmentTransfer)throw new Error('AI Studio 页面仍是旧版上传脚本，请关闭旧页面并从视频页重新发起任务');return r?.ok&&r.component===kind&&(kind!=='bilibili'||r.mainReady);}catch(e){if(e.message?.includes('旧版上传脚本'))throw e;return false;}};
+   const ping=async()=>{try{const r=await this.api.tabs.sendMessage(tabId,{type:config.ping},{frameId:0});if(kind==='aistudio'&&r?.ok&&r.component===kind&&!r.attachmentTransfer)throw new Error('AI Studio 页面仍是旧版上传脚本，请关闭旧页面并从视频页重新发起任务');if(kind==='chatgpt'&&r?.ok&&r.component===kind&&r.captureProtocol!==2)throw new Error('ChatGPT 页面仍是旧版对话脚本，请刷新该页后重试');return r?.ok&&r.component===kind&&(kind!=='bilibili'||r.mainReady);}catch(e){if(e.message?.includes('旧版上传脚本')||e.message?.includes('旧版对话脚本'))throw e;return false;}};
    await valid();if(await ping())return;
    if(!this.api.scripting?.executeScript)throw new Error(config.name+'未连接，当前扩展未取得脚本补载权限；请在扩展管理页重新加载并确认权限');
    try{

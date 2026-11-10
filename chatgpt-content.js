@@ -5,33 +5,60 @@
   // --- Last received subtitle file (for manual save) ---
   let _subtitleState = 'idle';
   let _taskActive = false;
+  let _lastConversationTask = null;
   const cancelledTasks = new Set();
   function assertNotCancelled(taskId) { if (taskId && cancelledTasks.has(taskId)) throw new Error('任务已取消，未自动发送'); }
   function reportTarget(msg, ok, error) { if (msg.taskId) chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok,...(error?{error}:{})}).catch(() => {}); }
   function readComposerText(editor = findTextarea()) {
     return editor?.value ?? editor?.innerText ?? editor?.textContent ?? '';
   }
+  async function verifyOwnedConversation(id,messageId){
+    const task=_lastConversationTask;
+    if(!task)throw new Error('缺少本次视频发送记录，不能确认对话归属');
+    if(task.candidateId!==id||!task.requestMessageId)throw new Error('没有与本次发送匹配的会话和消息编号，不能用当前页面替代');
+    const token=await getAccessToken();
+    let result;
+    for(let attempt=0;attempt<3;attempt++){
+      const response=await fetch('/backend-api/conversation/'+id,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(8000)});
+      if(!response.ok)throw new Error('读取本次对话失败：HTTP '+response.status);
+      const data=await response.json();
+      const firstUser=Object.values(data.mapping||{}).map(node=>node?.message).find(message=>message?.author?.role==='user');
+      result=VidSiftConversationBinding.verify(data,{...task,id,messageId:messageId||task.requestMessageId,now:Date.now()});
+      if(result.ok)return id;
+      if(result.reason!=='not_first_user_message'||firstUser)break;
+      await new Promise(resolve=>setTimeout(resolve,500));
+    }
+    const error=new Error('本次对话归属校验未通过：'+result.reason);error.reason=result.reason;throw error;
+  }
   function captureSubmittedConversation(expectedText, taskId){
-    const nonce=crypto.randomUUID();let finish,readyFinish,timer,readyTimer,stopped=false;
+    const nonce=crypto.randomUUID();let finish,readyFinish,timer,readyTimer,stopped=false,verifying=false;
     const promise=new Promise(resolve=>{finish=resolve;});
     const ready=new Promise(resolve=>{readyFinish=resolve;});
     const stages=new Set();
-    function diagnostic(stage){
-      if(stages.has(stage))return;stages.add(stage);
-      if(taskId)try{chrome.runtime.sendMessage({type:'VIDSIFT_DIAGNOSTIC',taskId,stage:'library.'+stage,details:{}}).catch(()=>{});}catch{}
+    function diagnostic(stage,reason){
+      const key=stage+':'+(reason||'');if(stages.has(key))return;stages.add(key);
+      if(taskId)try{chrome.runtime.sendMessage({type:'VIDSIFT_DIAGNOSTIC',taskId,stage:'library.'+stage,details:reason?{reason}:{}}).catch(()=>{});}catch{}
     }
     function stop(id=null){if(stopped)return;stopped=true;clearTimeout(timer);clearTimeout(readyTimer);readyFinish(false);window.removeEventListener('message',receive);window.postMessage({type:'VIDSIFT_LIBRARY_DISARM',nonce},location.origin);finish(id);}
     function receive(event){
       if(event.source!==window||event.origin!==location.origin||event.data?.nonce!==nonce||stopped)return;
       const data=event.data;
-      if(data.type==='VIDSIFT_LIBRARY_READY'){clearTimeout(readyTimer);readyFinish(true);diagnostic('armed');}
-      if(data.type==='VIDSIFT_LIBRARY_STAGE'&&['request_match','response_id','timeout','rejected_shape'].includes(data.stage))diagnostic(data.stage);
-      if(data.type==='VIDSIFT_LIBRARY_CONVERSATION_ID'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(data.id||''))stop(data.id);
+      if(data.protocol!==2)return;
+      if(data.type==='VIDSIFT_LIBRARY_READY'&&data.protocol===2){clearTimeout(readyTimer);readyFinish(true);diagnostic('armed');}
+      if(data.type==='VIDSIFT_LIBRARY_STAGE'&&['request_match','response_id','candidate_id','timeout','rejected_shape'].includes(data.stage))diagnostic(data.stage,data.reason);
+      if(data.type==='VIDSIFT_LIBRARY_CONVERSATION_CANDIDATE'&&!verifying&&/^[0-9a-f-]{36}$/i.test(data.id||'')){
+        verifying=true;
+        _lastConversationTask.candidateId=data.id;_lastConversationTask.requestMessageId=data.messageId;
+        verifyOwnedConversation(data.id,data.messageId).then(id=>{if(!stopped){diagnostic('ownership_verified');stop(id);}},error=>{if(!stopped){diagnostic('ownership_rejected',error.reason||'metadata_unavailable');stop();}});
+      }
+      if(data.type==='VIDSIFT_LIBRARY_CONVERSATION_ID'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(data.id||'')){
+        _lastConversationTask.candidateId=data.id;_lastConversationTask.requestMessageId=data.messageId;stop(data.id);
+      }
     }
     window.addEventListener('message',receive);
     timer=setTimeout(()=>{diagnostic('timeout');stop();},90000);
     readyTimer=setTimeout(()=>{diagnostic('timeout');stop();},1500);
-    window.postMessage({type:'VIDSIFT_LIBRARY_ARM',nonce,expectedText},location.origin);return {promise,ready,stop};
+    window.postMessage({type:'VIDSIFT_LIBRARY_ARM',nonce,protocol:2,expectedText,allowPrepared:!_lastConversationTask?.initialId},location.origin);return {promise,ready,stop};
   }
   let _lastFile = null; // { name: string, content: string }
 
@@ -45,7 +72,7 @@
   function showRetryRenameButton(conversationId, title) {
     if (_retryRenameBtn) return;
     _retryRenameBtn = document.createElement('button');
-    _retryRenameBtn.textContent = '✎ 重试改名';
+    _retryRenameBtn.textContent = '✎ 重试保存与改名';
     _retryRenameBtn.title = '发送字幕并生成会话后，可重新尝试修改会话名';
     _retryRenameBtn.style.cssText = getFloatingActionButtonStyle(
       _saveBtn || _retryUploadBtn ? 176 : 80, '#f59e0b');
@@ -55,12 +82,18 @@
       _retryRenameBtn.style.opacity = '0.7';
       _retryRenameBtn.style.cursor = 'not-allowed';
       try {
+        if(_taskActive)throw new Error('本次附件或对话仍在处理中，请等待当前任务结束');
         showStatus('正在重试修改会话名...');
         let id = conversationId;
         if (!id) {
           id = getConversationIdFromUrl();
         }
         if (!id) throw new Error('请先发送字幕并生成会话，再点击重试改名');
+        await verifyOwnedConversation(id);
+        if(_lastConversationTask?.libraryEligible){
+          const saved=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:_lastConversationTask.taskId,chatgptUrl:location.origin+'/c/'+id});
+          if(!saved?.ok)throw new Error('本次视频的书库关系尚未保存，请检查错误日志后重试');
+        }
         await renameConversationViaAPI(id, title);
         document.title = title;
         hideRetryRenameButton();
@@ -225,6 +258,7 @@
   }
 
   function showError(msg) {
+    globalThis.VidSiftErrors?.report(msg,{component:'chatgpt'});
     showStatus(msg);
     statusOverlay.style.background = '#e53935';
   }
@@ -589,7 +623,7 @@
     if (_cachedToken && Date.now() < _cachedTokenExpiry) {
       return _cachedToken;
     }
-    const sessionResp = await fetch('/api/auth/session');
+    const sessionResp = await fetch('/api/auth/session',{signal:AbortSignal.timeout(8000)});
     if (!sessionResp.ok) throw new Error(`获取 session token 失败：HTTP ${sessionResp.status}`);
     const session = await sessionResp.json();
     const token = session?.accessToken;
@@ -629,10 +663,12 @@
     const GRACE_ROUNDS = 3;
     let graceCountdown = -1; // -1 表示尚未进入宽限期
 
-    while (true) {
+    const deadline=Date.now()+90000;
+    while (Date.now()<deadline) {
       try {
         const resp = await fetch(`/backend-api/conversation/${conversationId}`, {
           headers: { 'Authorization': `Bearer ${token}` },
+          signal:AbortSignal.timeout(8000),
         });
         if (resp.ok) {
           const data = await resp.json();
@@ -663,6 +699,7 @@
       }
       await new Promise(r => setTimeout(r, 2000));
     }
+    throw new Error('ChatGPT标题生成等待超过90秒；总结已发送，可稍后重试保存与改名');
   }
 
   // Rename the conversation via ChatGPT internal API.
@@ -747,7 +784,7 @@
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if(msg.type==='VIDSIFT_CHATGPT_PING'){sendResponse({ok:true,component:'chatgpt'});return;}
+    if(msg.type==='VIDSIFT_CHATGPT_PING'){sendResponse({ok:true,component:'chatgpt',captureProtocol:2});return;}
     if (msg.type === 'VIDSIFT_CANCEL_UPLOAD') { cancelledTasks.add(msg.taskId); sendResponse({ok:true}); return; }
     if (msg.type === 'VIDSIFT_CHATGPT_CHECK_READY') {
       sendResponse(checkReady());
@@ -758,6 +795,8 @@
       // Reply immediately so popup can switch tab without waiting
       if (_taskActive) { sendResponse({ok:false,error:'已有附件任务正在处理'}); return; }
       _taskActive = true;
+      globalThis.VidSiftErrors?.setTask(msg.taskId);
+      _lastConversationTask={taskId:msg.taskId,startedAt:Date.now(),initialId:getConversationIdFromUrl(),libraryEligible:msg.libraryEligible===true};
       sendResponse({ ok: true });
 
       (async () => {
@@ -788,6 +827,7 @@
           showStatus('正在添加字幕文件...');
           showStatus('正在输入提示词...');
           inputPrompt(VidSiftAttachments.contextualPrompt(msg.prompt ?? await loadPrompt(), attachments, msg.source?.url || msg.sourceUrl || msg.bvid || msg.videoTitle));
+          _lastConversationTask.expectedText=readComposerText();
           showStatus('正在等待文件上传...');
           const receipts = [];
           for (const attachment of attachments) {
@@ -809,7 +849,7 @@
             }
           });
           reportTarget(msg, true);
-          if(msg.libraryEligible&&!msg.tempChat)chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId}).catch(()=>{});
+          if(msg.libraryEligible&&!msg.tempChat){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId});if(!receipt?.ok)showError('总结已发送，但本次视频的书库待办登记失败；详情已记录到日志');}
           // Submission succeeded — hide the save button now regardless of what happens next
           hideSaveButton();
           if (msg.bgOpen) scrollToResponseOnTabFocus();
@@ -823,7 +863,7 @@
               showRetryRenameButton(null, msg.videoTitle);
               return;
             }
-            if(msg.libraryEligible)chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl:location.origin+'/c/'+conversationId}).catch(()=>{});
+            if(msg.libraryEligible){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl:location.origin+'/c/'+conversationId});if(!receipt?.ok)throw new Error('总结已发送，但书库对话关系确认失败：'+(receipt?.error||'未收到回执'));}
             if(!msg.videoTitle){hideStatus();return;}
             showStatus('正在通过 API 修改会话名...');
             try {

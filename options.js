@@ -34,6 +34,7 @@ async function loadSavedAIStudioPrompt() {
 
 function flashStatus(el, msg, isError = false) {
   el.textContent = msg;
+  if(isError)globalThis.VidSiftErrors?.report(msg,{component:'options'});
   el.classList.toggle('error', isError);
   el.classList.add('show');
   setTimeout(() => el.classList.remove('show'), 1500);
@@ -729,16 +730,27 @@ function librarySwitchLabel(){document.getElementById('library-enabled-label').t
 async function refreshLibraryStatus(retry=false){
  libraryStatus.textContent=retry?'正在重试保存视频信息；不会重新生成总结':'正在读取书库保存状态';
  try{const result=await chrome.runtime.sendMessage({type:retry?'VIDSIFT_LIBRARY_RETRY':'VIDSIFT_LIBRARY_STATUS'});if(!result?.ok)throw Error(result?.error||'扩展后台未响应');libraryStatus.textContent=result.message+'；待保存或补封面 '+result.pending+' 条，等待对话链接 '+result.waiting+' 条';}
- catch(e){libraryStatus.textContent='无法确认视频书库保存状态：'+e.message;}
+ catch(e){libraryStatus.textContent='无法确认视频书库保存状态：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
 }
 libraryEnabled.addEventListener('change',librarySwitchLabel);
 document.getElementById('library-save').addEventListener('click',async()=>{
- if(!/^[a-p]{32}$/.test(libraryId.value.trim())){libraryStatus.textContent='知行批注扩展 ID 应是32个a到p的小写字母';return;}
- try{await chrome.storage.local.set({videoLibrarySettings:{enabled:libraryEnabled.checked,extensionId:libraryId.value.trim()}});libraryStatus.textContent='书库联动设置已保存；本块之外的设置保持原值';}catch(e){libraryStatus.textContent='书库联动设置未保存：'+e.message;}
+ if(!/^[a-p]{32}$/.test(libraryId.value.trim())){libraryStatus.textContent='知行批注扩展 ID 应是32个a到p的小写字母';globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'validation'});return;}
+ try{await chrome.storage.local.set({videoLibrarySettings:{enabled:libraryEnabled.checked,extensionId:libraryId.value.trim()}});libraryStatus.textContent='书库联动设置已保存；本块之外的设置保持原值';}catch(e){libraryStatus.textContent='书库联动设置未保存：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
 });
 document.getElementById('library-reset').addEventListener('click',async()=>{
- try{await chrome.storage.local.set({videoLibrarySettings:{...VidSiftVideoLibrary.DEFAULTS}});libraryEnabled.checked=true;libraryId.value=VidSiftVideoLibrary.DEFAULTS.extensionId;librarySwitchLabel();libraryStatus.textContent='书库联动已恢复默认；已有卡片、待办和其他设置保留';}catch(e){libraryStatus.textContent='书库联动默认设置未保存：'+e.message;}
+ try{await chrome.storage.local.set({videoLibrarySettings:{...VidSiftVideoLibrary.DEFAULTS}});libraryEnabled.checked=true;libraryId.value=VidSiftVideoLibrary.DEFAULTS.extensionId;librarySwitchLabel();libraryStatus.textContent='书库联动已恢复默认；已有卡片、待办和其他设置保留';}catch(e){libraryStatus.textContent='书库联动默认设置未保存：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
 });
 document.getElementById('library-retry').addEventListener('click',()=>refreshLibraryStatus(true));
 document.getElementById('library-refresh').addEventListener('click',()=>refreshLibraryStatus(false));
-chrome.storage.local.get('videoLibrarySettings').then(value=>{const config=VidSiftVideoLibrary.settings(value.videoLibrarySettings);libraryEnabled.checked=config.enabled;libraryId.value=config.extensionId;librarySwitchLabel();return refreshLibraryStatus();}).catch(e=>{libraryStatus.textContent='书库联动配置读取失败：'+e.message;});
+chrome.storage.local.get('videoLibrarySettings').then(value=>{const config=VidSiftVideoLibrary.settings(value.videoLibrarySettings);libraryEnabled.checked=config.enabled;libraryId.value=config.extensionId;librarySwitchLabel();return refreshLibraryStatus();}).catch(e=>{libraryStatus.textContent='书库联动配置读取失败：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});});
+
+// Persist visible error statuses even when the popup that started a test is gone.
+if(typeof MutationObserver==='function'){
+ const observed=new WeakMap();
+ const scan=()=>{for(const element of document.querySelectorAll('.error')){
+  if(element.hidden||!element.getClientRects().length)continue;
+  const message=element.textContent?.trim();if(!message||observed.get(element)===message)continue;
+  observed.set(element,message);globalThis.VidSiftErrors?.report(message,{component:'options'});
+ }};
+ new MutationObserver(scan).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['class']});
+}

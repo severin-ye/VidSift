@@ -69,7 +69,8 @@
       else if (/附件状态已改变/.test(message)) category='attachment_changed';
       else if (/转写|字幕|SRT|音频首尾/.test(message)) category='transcript_incomplete';
       else if (/加载超时/.test(message)) category='page_timeout';
-      return {category,errorName:['Error','TypeError','RangeError','DOMException','AbortError'].includes(error?.name)?error.name:'Error'};
+      const reason=/唯一完成标记/.test(message)?'completion_marker_missing':/完成标记与音频时长/.test(message)?'completion_duration_mismatch':/编号缺失/.test(message)?'subtitle_numbering':/时间戳/.test(message)?'subtitle_timestamp':/音频首尾/.test(message)?'subtitle_boundary':/未关闭的对话框/.test(message)?'visible_modal':/上传状态未确认/.test(message)?'attachment_unconfirmed':/转写生成失败/.test(message)?'generation_failed':category;
+      return {category,reason,errorName:['Error','TypeError','RangeError','DOMException','AbortError'].includes(error?.name)?error.name:'Error'};
     } catch (_) { return {category,errorName:'Error'}; }
   }
   function diagnosticCancellation(reason) {
@@ -109,6 +110,8 @@
   }
 
   function showError(msg) {
+    const failure=diagnosticError(new Error(msg));
+    globalThis.VidSiftErrors?.report(msg,{component:'aistudio',taskId:_activeTaskId,category:failure.category,details:failure});
     showStatus(msg);
     statusOverlay.style.background = '#d93025';
   }

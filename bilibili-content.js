@@ -67,6 +67,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
   if (msg.type === 'EXT_ERROR') {
+    globalThis.VidSiftErrors?.report(msg.text,{component:'bilibili',taskId:msg.taskId});
     showOverlay(msg.text);
 
     sendResponse({ ok: true });

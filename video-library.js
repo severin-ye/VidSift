@@ -52,7 +52,7 @@
  }
  function deadline(promise,ms=6000){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('书库接收等待超时，已保留待保存记录')),ms);})]).finally(()=>clearTimeout(timer));}
  class VideoLibraryBridge{
-  constructor(api,{cover=downloadCover,now=Date.now}={}){this.api=api;this.cover=cover;this.now=now;this.serial=Promise.resolve();this.draining=null;}
+  constructor(api,{cover=downloadCover,now=Date.now,onError=()=>{}}={}){this.api=api;this.cover=cover;this.now=now;this.onError=onError;this.serial=Promise.resolve();this.draining=null;}
   async read(){const state=(await this.api.storage.local.get(STATE_KEY))[STATE_KEY]||{version:1,tasks:[],pending:[],message:'尚无视频总结保存记录'};if(!state.covers)state.covers=[];return state;}
   mutate(fn){const run=this.serial.then(async()=>{const state=await this.read();const result=await fn(state);await this.api.storage.local.set({[STATE_KEY]:state});return result;});this.serial=run.catch(()=>{});return run;}
   async status(){const state=await this.read();return {pending:state.pending.length+state.covers.length,unsaved:state.pending.length,coverPending:state.covers.length,waiting:state.tasks.filter(t=>t.sent).length,message:state.message,lastSavedAt:state.lastSavedAt||null};}
@@ -93,7 +93,7 @@
      if(!result?.ok||result.id!==record.id)throw Error(result?.error||'知行批注书库未确认保存，记录仍保留待重试');
      await this.mutate(s=>{s.pending=s.pending.filter(p=>p.id!==record.id);s.covers=s.covers.filter(p=>p.id!==record.id);let detail='';if(!record.coverDataUrl&&record.coverUrl){if(s.covers.length<20){s.covers.push(record);detail='；封面待补齐，不影响其他卡片保存';}else detail='；封面暂缺，补图待办已达20条，本条未排入补图';}else if(!record.coverDataUrl)detail='；页面未提供可用封面地址，本条显示封面暂缺';s.lastSavedAt=new Date(this.now()).toISOString();s.message='视频和ChatGPT链接已在知行批注书库本地保存'+(record.coverDataUrl?'，封面已保存':detail);});
     }
-   }catch(e){await this.mutate(s=>{s.message='视频总结尚未保存到知行批注书库：'+String(e.message).slice(0,300)+'；已保留待办，可在设置中重试';});}
+   }catch(e){await this.mutate(s=>{s.message='视频总结尚未保存到知行批注书库：'+String(e.message).slice(0,300)+'；已保留待办，可在设置中重试';});try{await this.onError(e);}catch{}}
    return this.status();
   }
  }

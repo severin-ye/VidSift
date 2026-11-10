@@ -2,6 +2,7 @@
 importScripts('task-diagnostics.js','audio-settings.js','douyin-local-settings.js','local-transcription.js','local-media-cache.js','attachment-transfer.js','platforms.js','native-client.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js');
 
 const _diagnostics=VidSiftDiagnostics.create(chrome.storage?.local,{version:chrome.runtime.getManifest?.().version||'unknown'});
+importScripts('background-errors.js');
 function diagnoseTask(task,stage,details={}){try{if(stage==='task.started')_diagnostics.begin(task.id,{sourceTabId:task.tabId,platform:task.source.platform,videoId:task.source.videoId},task.diagnosticId);return _diagnostics.record(task.id,stage,details);}catch{return Promise.resolve(false);}}
 
 const _legacyGuard = new SourceGuard(id=>chrome.tabs.get(id), VidSiftPlatforms.identify);
@@ -59,6 +60,7 @@ async function ensureChatGPTReady(tabId, timeout = 600_000) {
 
 // Send a message to the target tab's overlay (fire-and-forget)
 function overlayMsg(tabId, msg) {
+  if(msg.type==='EXT_ERROR')void _diagnostics.visibleError({message:msg.text,component:'background',taskId:msg.taskId},tabId);
   chrome.tabs.sendMessage(tabId, msg).catch(() => {});
 }
 
