@@ -19,7 +19,7 @@
    await assertLive?.();
    if(signal?.aborted)throw new Error('视频处理已取消');
    const key=task?.id||'settings';if(this.tasks.has(key))return this.tasks.get(key).promise;
-   const entry={key,token:crypto.randomUUID(),client,signal,assertLive,saving:false};
+   const entry={key,token:crypto.randomUUID(),client,signal,assertLive,forTask:!!task,saving:false};
    entry.promise=new Promise((resolve,reject)=>{entry.resolve=resolve;entry.reject=reject;});entry.promise.catch(()=>{});
    entry.abort=()=>this.finish(entry,new Error('视频处理已取消'));
    this.entries.set(entry.token,entry);this.tasks.set(key,entry);signal?.addEventListener('abort',entry.abort,{once:true});
@@ -40,7 +40,7 @@
    const entry=this.entries.get(token);if(!entry)return{ok:false,error:'当前配置窗口已失效，请从视频任务或设置页重新打开'};
    try{await entry.created;}catch{return{ok:false,error:'配置窗口未就绪'};}
    if(sender.tab?.id!==entry.tabId||this.entries.get(token)!==entry)return{ok:false,error:'密钥配置请求来源无效'};
-   if(message.type==='VIDSIFT_GROQ_KEY_READY')return{ok:true};
+   if(message.type==='VIDSIFT_GROQ_KEY_READY')return{ok:true,forTask:entry.forTask};
    if(message.type!=='VIDSIFT_GROQ_KEY_SAVE')return{ok:false,error:'未知密钥配置操作'};
    if(entry.saving)return{ok:false,error:'正在验证并保存，请稍候'};
    entry.saving=true;

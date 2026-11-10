@@ -42,6 +42,7 @@ async function until(read,ms=15000){const end=Date.now()+ms;while(Date.now()<end
  const changed=start();page=await dialog();await source.goto('https://www.douyin.com/video/7705654749961489664');await until(()=>page.isClosed());
  assert.equal((await changed).ok,false);assert.equal(await worker.evaluate(()=>_keyTest.sends),2);report.checks.push('source switch while awaiting key never sends old video');
  await source.goto(sourceUrl);await worker.evaluate(()=>{_keyTest.subtitle=true;});assert((await start()).ok);assert.equal(await worker.evaluate(()=>_keyTest.transcribes),2);report.checks.push('existing subtitles bypass key prompt and audio transcription');
+ await control.locator('#groqConfigure').click();page=await dialog();assert.equal(await page.locator('#save').innerText(),'验证并保存');await page.locator('#cancel').click();report.checks.push('settings reuse has correct save-only copy');
  report.passed=true;
 }catch(error){report.error=error.stack;process.exitCode=1;}finally{
  if(context)await context.close();report.contextClosed=true;
