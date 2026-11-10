@@ -94,7 +94,13 @@
           const saved=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:_lastConversationTask.taskId,chatgptUrl:location.origin+'/c/'+id});
           if(!saved?.ok)throw new Error('本次视频的书库关系尚未保存，请检查错误日志后重试');
         }
-        await renameConversationViaAPI(id, title);
+        if (!await renameConversationViaAPI(id, title)) {
+          showStatus('总结已发送；ChatGPT仍在等待标题，会话名待更新，可稍后只重试改名。');
+          _retryRenameBtn.disabled = false;
+          _retryRenameBtn.style.opacity = '1';
+          _retryRenameBtn.style.cursor = 'pointer';
+          return;
+        }
         document.title = title;
         hideRetryRenameButton();
         hideStatus();
@@ -659,11 +665,12 @@
   //      → 服务端标题生成可能有延迟，再多等几轮给它一个窗口期，
   //        如果窗口期内标题仍未变化，则放弃等待。
   async function waitForTitleGeneration(conversationId, token) {
-    // 回复完成后额外等待的轮数（每轮 2 秒）
+    // 长思考与标题延迟不是发送失败；有界等待后保留只改名的恢复入口。
+    // 回复完成后额外等待的轮数（每轮 5 秒）
     const GRACE_ROUNDS = 3;
     let graceCountdown = -1; // -1 表示尚未进入宽限期
-
-    const deadline=Date.now()+90000;
+    let lastReadOK = false, lastError = null;
+    const deadline=Date.now()+15*60*1000;
     while (Date.now()<deadline) {
       try {
         const resp = await fetch(`/backend-api/conversation/${conversationId}`, {
@@ -672,9 +679,10 @@
         });
         if (resp.ok) {
           const data = await resp.json();
+          lastReadOK = true;
           if (data.title && data.title !== DEFAULT_TITLE) {
             console.log('[ext] ChatGPT 自动标题已生成:', data.title);
-            return;
+            return true;
           }
           // 标题仍为默认值，检查助手回复是否已完成
           if (hasAnyFinishedAssistantResponse(data)) {
@@ -687,19 +695,27 @@
             }
             if (graceCountdown <= 0) {
               console.log('[ext] 宽限期结束，标题仍为默认值，放弃等待标题生成');
-              return;
+              return true;
             }
             console.log(`[ext] 宽限期剩余 ${graceCountdown} 轮...`);
           } else {
             console.log('[ext] 当前标题仍为默认值，助手回复尚未完成，继续等待...');
           }
+        } else {
+          lastReadOK = false;
+          lastError = new Error('读取本次会话标题失败：HTTP '+resp.status);
+          if (resp.status === 401 || resp.status === 403) throw lastError;
         }
       } catch (e) {
+        lastReadOK = false;
+        lastError = e;
+        if (/HTTP (401|403)\b/.test(e.message)) throw e;
         console.warn('[ext] waitForTitleGeneration 轮询出错:', e);
       }
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 5000));
     }
-    throw new Error('ChatGPT标题生成等待超过90秒；总结已发送，可稍后重试保存与改名');
+    if (!lastReadOK && lastError) throw lastError;
+    return false;
   }
 
   // Rename the conversation via ChatGPT internal API.
@@ -708,7 +724,7 @@
     const token = await getAccessToken();
 
     // 先等待 ChatGPT 自动标题生成完成，避免被覆盖
-    await waitForTitleGeneration(conversationId, token);
+    if (!await waitForTitleGeneration(conversationId, token)) return false;
 
     async function patchTitle() {
       const resp = await fetch(`/backend-api/conversation/${conversationId}`, {
@@ -718,6 +734,7 @@
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({ title }),
+        signal: AbortSignal.timeout(8000),
       });
       if (!resp.ok) throw new Error(`API 重命名失败：HTTP ${resp.status}`);
     }
@@ -730,6 +747,7 @@
     try {
       const checkResp = await fetch(`/backend-api/conversation/${conversationId}`, {
         headers: { 'Authorization': `Bearer ${token}` },
+        signal: AbortSignal.timeout(8000),
       });
       if (checkResp.ok) {
         const data = await checkResp.json();
@@ -743,6 +761,7 @@
     } catch (e) {
       console.warn('[ext] 标题确认检查出错:', e);
     }
+    return true;
   }
 
   // After clicking send, scroll the new response turn into view the first time
@@ -865,9 +884,14 @@
             }
             if(msg.libraryEligible){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl:location.origin+'/c/'+conversationId});if(!receipt?.ok)throw new Error('总结已发送，但书库对话关系确认失败：'+(receipt?.error||'未收到回执'));}
             if(!msg.videoTitle){hideStatus();return;}
-            showStatus('正在通过 API 修改会话名...');
+            showStatus('总结已发送；正在等待 ChatGPT 标题，随后自动改为视频名...');
             try {
-              await renameConversationViaAPI(conversationId, msg.videoTitle);
+              if (!await renameConversationViaAPI(conversationId, msg.videoTitle)) {
+                clearInterval(titleTimer);
+                showStatus(`${bvidPrefix}总结已发送；ChatGPT仍在等待标题，会话名待更新，可稍后只重试改名。`);
+                showRetryRenameButton(conversationId, msg.videoTitle);
+                return;
+              }
               hideRetryRenameButton();
               clearInterval(titleTimer);
               document.title = msg.videoTitle;

@@ -1,12 +1,12 @@
 # 安装独立知行视频总结（VidSift）
 
-- 先把ZIP解压到固定目录，例如 `%LOCALAPPDATA%\VidSift\extension\5.4.0`；不要从临时解压目录加载。
+- 先把ZIP解压到固定目录，例如 `%LOCALAPPDATA%\VidSift\extension\5.4.1`；不要从临时解压目录加载。
 - 在Chrome的 `chrome://extensions` 或Edge的 `edge://extensions` 中，按浏览器提供的开发者加载流程选择“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录；需要的浏览器权限由用户在界面确认。
-- 核对名称知行视频总结、版本5.4.0、ID `kggdkncbamdlhhihfkeldbbkppkgihad`；原扩展可以保留，不需要卸载、关闭或替换。
+- 核对名称知行视频总结、版本5.4.1、ID `kggdkncbamdlhhihfkeldbbkppkgihad`；原扩展可以保留，不需要卸载、关闭或替换。
 - 两扩展同时启用时各自响应各自弹窗；执行任务时只操作其中一个弹窗，以免人为启动两个相同任务。
 - 从5.0.2起使用 `scripting` 权限，在已授权视频页或目标网站补载缺失脚本并读取当前作品资源；如浏览器要求确认，请在扩展管理页确认后重新加载，并刷新视频页。
 
-- 抖音Groq转写需要更新Native至5.4.0；旧Native缺少云端接口，不能用旧版连接成功代替兼容性检查。
+- 抖音Groq转写需要Native5.4.0及以上；扩展5.4.1仅修复GPT改名等待，已安装的Native5.4.0可直接复用，不能用更旧版本连接成功代替兼容性检查。
 - 安装器复用FFmpeg与依赖缓存；Groq不下载本地模型，已有本地模型缓存保留，仅在显式选择本地转写时使用。
 - 在个人目录 `.env` 配置 `GROQ_API_KEY`（或环境变量），不要把密钥填进源码或发到聊天；Groq免费账号即可，无需开启付费计划。
 - 安装后在“抖音转写”检测Groq配置，选择Groq与turbo模型；既有明确选择继续保留，不改变B站/YouTube设置。

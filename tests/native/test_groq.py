@@ -144,4 +144,3 @@ class GroqTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'未截断'):service.transcribe_groq(descriptor,job,lambda _:None)
             self.assertEqual(len(commands),1);self.assertNotIn('-t',commands[0]);self.assertNotIn('-ss',commands[0])
             self.assertFalse(list(service.local_audio.root.glob('*.m4a')))
-
