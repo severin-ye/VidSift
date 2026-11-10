@@ -111,7 +111,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
  }
  if(msg.type==='VIDSIFT_DIAGNOSTIC'){
   const fromPopup=!sender.tab&&sender.url?.endsWith('/popup.html');
-  if(!fromPopup&&!/^aistudio\./.test(msg.stage||'')){sendResponse({ok:false});return false;}
+  if(!fromPopup&&!/^(?:aistudio|library)\./.test(msg.stage||'')){sendResponse({ok:false});return false;}
   if(!fromPopup&&!sender.tab){sendResponse({ok:false});return false;}
   _diagnostics.record(msg.taskId,msg.stage,msg.details,fromPopup?undefined:sender.tab.id).then(ok=>sendResponse({ok}));return true;
  }

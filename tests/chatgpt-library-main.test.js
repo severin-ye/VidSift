@@ -8,11 +8,11 @@ function fixture(){const listeners=[],posts=[];const window={fetch:async()=>new 
 test('matching new-conversation response binds its own ID, independent of current route',async()=>{
  const f=fixture();f.message({type:'VIDSIFT_LIBRARY_ARM',nonce:'n',expectedText:'video summary prompt'});
  const response=await f.window.fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify({messages:[{author:{role:'user'},content:{parts:['video summary prompt']}}]})});
- assert.match(await response.text(),/conversation_id/);for(let n=0;n<20&&!f.posts.length;n++)await new Promise(r=>setTimeout(r,5));
- assert.deepEqual(f.posts.map(p=>({type:p.type,id:p.id,nonce:p.nonce})),[{type:'VIDSIFT_LIBRARY_CONVERSATION_ID',id,nonce:'n'}]);
+ assert.match(await response.text(),/conversation_id/);for(let n=0;n<20&&!f.posts.some(p=>p.type==='VIDSIFT_LIBRARY_CONVERSATION_ID');n++)await new Promise(r=>setTimeout(r,5));
+ assert.deepEqual(f.posts.filter(p=>p.type==='VIDSIFT_LIBRARY_CONVERSATION_ID').map(p=>({type:p.type,id:p.id,nonce:p.nonce})),[{type:'VIDSIFT_LIBRARY_CONVERSATION_ID',id,nonce:'n'}]);
 });
 test('unrelated prompt or existing conversation cannot claim a task',async()=>{
  const f=fixture();f.message({type:'VIDSIFT_LIBRARY_ARM',nonce:'n',expectedText:'expected prompt'});
  for(const body of [{messages:[{author:{role:'user'},content:{parts:['other text']}}]},{conversation_id:id,messages:[{author:{role:'user'},content:{parts:['expected prompt']}}]}])await f.window.fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify(body)});
- await new Promise(r=>setTimeout(r,15));assert.equal(f.posts.length,0);f.message({type:'VIDSIFT_LIBRARY_DISARM',nonce:'n'});
+ await new Promise(r=>setTimeout(r,15));assert.equal(f.posts.filter(p=>p.type==='VIDSIFT_LIBRARY_CONVERSATION_ID').length,0);f.message({type:'VIDSIFT_LIBRARY_DISARM',nonce:'n'});
 });

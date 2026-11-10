@@ -26,8 +26,11 @@ async function prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,ope
 }
 chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
  if(msg.type==='VIDSIFT_TARGET_DONE'&&msg.ok===false){_videoLibrary.abandon(msg.taskId).catch(()=>{});return false;}
- if(['VIDSIFT_LIBRARY_SUBMITTED','VIDSIFT_LIBRARY_CONFIRMED'].includes(msg.type)){
+ if(['VIDSIFT_LIBRARY_SUBMITTED','VIDSIFT_LIBRARY_CONFIRMED','VIDSIFT_LIBRARY_UNCONFIRMED'].includes(msg.type)){
   if(!sender.tab||!/^https:\/\/(chatgpt\.com|chat\.openai\.com)\//.test(sender.url||sender.tab.url||'')){reply({ok:false});return false;}
+  if(msg.type==='VIDSIFT_LIBRARY_UNCONFIRMED'){
+   _videoLibrary.mutate(s=>{const task=s.tasks.find(t=>t.taskId===msg.taskId&&t.tabId===sender.tab.id&&t.sent);if(task){task.captureStatus='unconfirmed';s.message='总结请求已发送，但本次ChatGPT链接未确认，尚未入书库；已保留视频待办，不会重发总结';}}).then(()=>reply({ok:true})).catch(e=>reply({ok:false,error:e.message}));return true;
+  }
   (msg.type==='VIDSIFT_LIBRARY_SUBMITTED'?_videoLibrary.submitted(msg.taskId,sender):_videoLibrary.confirmed(msg.taskId,sender,msg.chatgptUrl)).then(()=>{reply({ok:true});return _videoLibrary.drain();}).catch(e=>reply({ok:false,error:e.message}));return true;
  }
  if(['VIDSIFT_LIBRARY_STATUS','VIDSIFT_LIBRARY_RETRY'].includes(msg.type)){
@@ -35,5 +38,5 @@ chrome.runtime.onMessage.addListener((msg,sender,reply)=>{
   (msg.type==='VIDSIFT_LIBRARY_RETRY'?_videoLibrary.drain():_videoLibrary.status()).then(status=>reply({ok:true,...status})).catch(e=>reply({ok:false,error:e.message}));return true;
  }
 });
-chrome.tabs.onRemoved.addListener(tabId=>{_videoLibrary.mutate(s=>{s.tasks=s.tasks.filter(t=>t.tabId!==tabId||t.chatgptUrl);}).catch(()=>{});});
+chrome.tabs.onRemoved.addListener(tabId=>{_videoLibrary.mutate(s=>{for(const task of s.tasks.filter(t=>t.tabId===tabId&&t.sent&&!t.chatgptUrl)){task.captureStatus='unconfirmed';s.message='总结请求已发送，但页面已关闭且本次ChatGPT链接未确认，尚未入书库；已保留视频待办，不会重发总结';}s.tasks=s.tasks.filter(t=>t.tabId!==tabId||t.chatgptUrl||t.sent);}).catch(()=>{});});
 chrome.runtime.onStartup?.addListener(()=>{_videoLibrary.drain().catch(()=>{});});

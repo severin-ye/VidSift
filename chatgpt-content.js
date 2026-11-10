@@ -8,13 +8,30 @@
   const cancelledTasks = new Set();
   function assertNotCancelled(taskId) { if (taskId && cancelledTasks.has(taskId)) throw new Error('任务已取消，未自动发送'); }
   function reportTarget(msg, ok, error) { if (msg.taskId) chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok,...(error?{error}:{})}).catch(() => {}); }
-  function captureSubmittedConversation(expectedText){
-    const nonce=crypto.randomUUID();let finish,timer;
+  function readComposerText(editor = findTextarea()) {
+    return editor?.value ?? editor?.innerText ?? editor?.textContent ?? '';
+  }
+  function captureSubmittedConversation(expectedText, taskId){
+    const nonce=crypto.randomUUID();let finish,readyFinish,timer,readyTimer,stopped=false;
     const promise=new Promise(resolve=>{finish=resolve;});
-    function stop(id=null){clearTimeout(timer);window.removeEventListener('message',receive);window.postMessage({type:'VIDSIFT_LIBRARY_DISARM',nonce},location.origin);finish(id);}
-    function receive(event){if(event.source===window&&event.origin===location.origin&&event.data?.type==='VIDSIFT_LIBRARY_CONVERSATION_ID'&&event.data.nonce===nonce&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(event.data.id||''))stop(event.data.id);}
-    window.addEventListener('message',receive);timer=setTimeout(()=>stop(),90000);
-    window.postMessage({type:'VIDSIFT_LIBRARY_ARM',nonce,expectedText},location.origin);return {promise,stop};
+    const ready=new Promise(resolve=>{readyFinish=resolve;});
+    const stages=new Set();
+    function diagnostic(stage){
+      if(stages.has(stage))return;stages.add(stage);
+      if(taskId)try{chrome.runtime.sendMessage({type:'VIDSIFT_DIAGNOSTIC',taskId,stage:'library.'+stage,details:{}}).catch(()=>{});}catch{}
+    }
+    function stop(id=null){if(stopped)return;stopped=true;clearTimeout(timer);clearTimeout(readyTimer);readyFinish(false);window.removeEventListener('message',receive);window.postMessage({type:'VIDSIFT_LIBRARY_DISARM',nonce},location.origin);finish(id);}
+    function receive(event){
+      if(event.source!==window||event.origin!==location.origin||event.data?.nonce!==nonce||stopped)return;
+      const data=event.data;
+      if(data.type==='VIDSIFT_LIBRARY_READY'){clearTimeout(readyTimer);readyFinish(true);diagnostic('armed');}
+      if(data.type==='VIDSIFT_LIBRARY_STAGE'&&['request_match','response_id','timeout','rejected_shape'].includes(data.stage))diagnostic(data.stage);
+      if(data.type==='VIDSIFT_LIBRARY_CONVERSATION_ID'&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(data.id||''))stop(data.id);
+    }
+    window.addEventListener('message',receive);
+    timer=setTimeout(()=>{diagnostic('timeout');stop();},90000);
+    readyTimer=setTimeout(()=>{diagnostic('timeout');stop();},1500);
+    window.postMessage({type:'VIDSIFT_LIBRARY_ARM',nonce,expectedText},location.origin);return {promise,ready,stop};
   }
   let _lastFile = null; // { name: string, content: string }
 
@@ -781,7 +798,10 @@
           console.log('[ext] CHATGPT_PREPARE_PROMPT: file attached successfully, proceeding to send');
           showStatus('正在发送...');
           assertNotCancelled(msg.taskId);
-          if(!msg.tempChat&&(msg.videoTitle||msg.libraryEligible))libraryBinding=captureSubmittedConversation(findTextarea()?.value??findTextarea()?.textContent??'');
+          if(!msg.tempChat&&(msg.videoTitle||msg.libraryEligible)){
+            libraryBinding=captureSubmittedConversation(readComposerText(),msg.taskId);
+            await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
+          }
           await clickSend(msg.taskId, () => {
             const visible = getVisibleFileTiles();
             for (const tile of receipts) {
@@ -797,6 +817,7 @@
           if ((msg.videoTitle||msg.libraryEligible) && !msg.tempChat) {
             const conversationId = await libraryBinding.promise;
             if (!conversationId) {
+              if(msg.libraryEligible)chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_UNCONFIRMED',taskId:msg.taskId}).catch(()=>{});
               clearInterval(titleTimer);
               showError(`${bvidPrefix}总结请求已发送，但无法确认本次对话归属；未自动入书库或修改其他会话名`);
               showRetryRenameButton(null, msg.videoTitle);
