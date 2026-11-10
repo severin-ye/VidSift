@@ -1,4 +1,4 @@
-# 通用总结扩展（VidSift）5.2.0 独立测试版
+# 通用总结扩展（VidSift）5.2.1 独立测试版
 
 - 基于 bilibili-subtitle-to-chatgpt 改造，保留弹窗、自定义提示词、临时对话、后台打开及自动上传发送流程。
 - 本包使用独立 ID `kggdkncbamdlhhihfkeldbbkppkgihad`，可与原版 `nigiglinogpocaonjlenipdhhlmnkmee` 并存；不接替原版，不读取或迁移原版设置及模型缓存。

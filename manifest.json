@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "通用总结扩展",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "description": "提取 B站、YouTube、抖音字幕或音频，可选图片拼图，发送到 ChatGPT / AI Studio",
   "background": {
     "service_worker": "background.js"
@@ -48,6 +48,7 @@
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     }
@@ -148,6 +149,7 @@
   ],
   "icons": {
     "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
