@@ -20,7 +20,7 @@ try {
   Remove-Item -LiteralPath $resolved -Recurse -Force
  }
  New-Item -ItemType Directory -Force -Path $stage | Out-Null
- $items=@('manifest.json','background.js','background-video.js','popup.js','popup.html','popup.css','options.html','options.js','screenshot-settings.js','attachment-utils.js','attachment-transfer.js','audio-settings.js','native-client.js','platforms.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','platform-content.js','bilibili-content.js','bilibili-content-main.js','chatgpt-content.js','aistudio-content.js','aistudio-transcript.js','offscreen.js','offscreen.html','prompt_chatgpt.txt','prompt_aistudio.txt','PRIVACY_POLICY.md','README.md','INSTALL.md','CHANGELOG.md','LICENSE','THIRD_PARTY.md','icons','lib','test','installer','requirements-native.txt','package.json')
+ $items=@('manifest.json','background.js','background-video.js','video-library.js','background-library.js','popup.js','popup.html','popup.css','options.html','options.js','screenshot-settings.js','attachment-utils.js','attachment-transfer.js','audio-settings.js','native-client.js','platforms.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','platform-content.js','bilibili-content.js','bilibili-content-main.js','chatgpt-content.js','chatgpt-library-main.js','aistudio-content.js','aistudio-transcript.js','offscreen.js','offscreen.html','prompt_chatgpt.txt','prompt_aistudio.txt','PRIVACY_POLICY.md','README.md','INSTALL.md','CHANGELOG.md','LICENSE','THIRD_PARTY.md','设计对齐稿','icons','lib','test','installer','requirements-native.txt','package.json')
  foreach($item in $items){
   if(!(Test-Path -LiteralPath $item)){throw "Package input missing: $item"}
   Copy-Item -LiteralPath $item -Destination $stage -Recurse -Force
@@ -28,6 +28,7 @@ try {
  New-Item -ItemType Directory -Path (Join-Path $stage 'native'),(Join-Path $stage 'docs') -Force | Out-Null
  foreach($name in @('host.py','__init__.py','THIRD_PARTY.md')){Copy-Item -LiteralPath (Join-Path 'native' $name) -Destination (Join-Path $stage 'native')}
  Copy-Item -LiteralPath 'docs/README.upstream.md' -Destination (Join-Path $stage 'docs')
+ if(Test-Path -LiteralPath 'docs/superpowers'){Copy-Item -LiteralPath 'docs/superpowers' -Destination (Join-Path $stage 'docs') -Recurse}
  $zip=Join-Path $dist ('VidSift-'+$releaseVersion+'-standalone.zip')
  Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
  $stream=[IO.File]::OpenRead($zip);$sha=[Security.Cryptography.SHA256]::Create()

@@ -1,5 +1,5 @@
 'use strict';
-importScripts('audio-settings.js','attachment-transfer.js','platforms.js','native-client.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js');
+importScripts('audio-settings.js','attachment-transfer.js','platforms.js','native-client.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js');
 
 const _legacyGuard = new SourceGuard(id=>chrome.tabs.get(id), VidSiftPlatforms.identify);
 const _pageBridge = new PageBridge(chrome);
@@ -441,11 +441,14 @@ async function _openChatGPTAndSend({ file, attachments, taskId, legacyTask, befo
 
     if(legacyTask) { await _legacyGuard.check(legacyTask); taskId=legacyTask.id; }
     if(beforePrepare) await beforePrepare();
+    const libraryEligible=await prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,openerTabId,videoTitle,tempChat});
+    if(legacyTask)await _legacyGuard.check(legacyTask);
+    if(beforePrepare)await beforePrepare();
     const completion = beforeDispatch ? beforeDispatch(targetTabId) : legacyTask ? waitForTarget(legacyTask,targetTabId) : null;
     if (completion) completion.catch(() => {});
     await chrome.tabs.sendMessage(targetTabId, {
       type: 'VIDSIFT_CHATGPT_PREPARE_PROMPT',
-      attachments, taskId, source,
+      attachments, taskId, source, libraryEligible,
       file,
       bgOpen,
       tempChat,
@@ -454,6 +457,7 @@ async function _openChatGPTAndSend({ file, attachments, taskId, legacyTask, befo
     });
     return { ok: true, targetTabId, completion };
   } catch (e) {
+    if(taskId)_videoLibrary.abandon(taskId).catch(()=>{});
     if (targetTabId) overlayMsg(targetTabId, { type: 'EXT_ERROR', text: `错误：${e.message}` });
     return { ok: false, error: e.message };
   }

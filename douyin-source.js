@@ -16,7 +16,8 @@ function DouyinPageSource(expectedId){
   // This list belongs to the selected video's playback data; music.play_url
   // is a different object and must never be used as the narration source.
   const audio=(Array.isArray(video.bitRateAudioList)?video.bitRateAudioList:[]).slice().sort((a,b)=>(Number(a.bitrate)||Infinity)-(Number(b.bitrate)||Infinity)).flatMap(a=>Array.isArray(a.urlList)?a.urlList.map(u=>typeof u==='string'?u:u?.src||u?.url):[]).filter(u=>typeof u==='string'&&u.length<8192).map(u=>u.startsWith('//')?'https:'+u:u).find(allowed);
-  return {platform:'douyin',videoId:expectedId,title:String(item.desc||item.item_title||item.title||('抖音视频 '+expectedId)).slice(0,512),duration,douyin:{videoId:expectedId,videoUrl:media,...(audio?{audioUrl:audio}:{})}};
+  const cover=[video.cover,video.origin_cover,video.originCover,video.coverUrl].flatMap(v=>typeof v==='string'?[v]:v?.url_list||v?.urlList||[]).find(value=>{try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&['douyinpic.com','douyincdn.com','byteimg.com','ibytedtos.com','pstatp.com'].some(d=>u.hostname===d||u.hostname.endsWith('.'+d));}catch{return false;}});
+  return {platform:'douyin',videoId:expectedId,title:String(item.desc||item.item_title||item.title||('抖音视频 '+expectedId)).slice(0,512),duration,...(cover?{coverUrl:cover}:{}),douyin:{videoId:expectedId,videoUrl:media,...(audio?{audioUrl:audio}:{})}};
  }
  const roots=[];let videoOnly=null;
  for(const key of ['_ROUTER_DATA','__INITIAL_STATE__','_SSR_DATA','RENDER_DATA']){try{if(window[key]&&typeof window[key]==='object')roots.push(window[key]);}catch{}}

@@ -8,6 +8,14 @@
   const cancelledTasks = new Set();
   function assertNotCancelled(taskId) { if (taskId && cancelledTasks.has(taskId)) throw new Error('任务已取消，未自动发送'); }
   function reportTarget(msg, ok, error) { if (msg.taskId) chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok,...(error?{error}:{})}).catch(() => {}); }
+  function captureSubmittedConversation(expectedText){
+    const nonce=crypto.randomUUID();let finish,timer;
+    const promise=new Promise(resolve=>{finish=resolve;});
+    function stop(id=null){clearTimeout(timer);window.removeEventListener('message',receive);window.postMessage({type:'VIDSIFT_LIBRARY_DISARM',nonce},location.origin);finish(id);}
+    function receive(event){if(event.source===window&&event.origin===location.origin&&event.data?.type==='VIDSIFT_LIBRARY_CONVERSATION_ID'&&event.data.nonce===nonce&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(event.data.id||''))stop(event.data.id);}
+    window.addEventListener('message',receive);timer=setTimeout(()=>stop(),90000);
+    window.postMessage({type:'VIDSIFT_LIBRARY_ARM',nonce,expectedText},location.origin);return {promise,stop};
+  }
   let _lastFile = null; // { name: string, content: string }
 
   // --- Save subtitle button ---
@@ -543,14 +551,13 @@
     return location.pathname.match(/^\/c\/([0-9a-f-]{36})/i)?.[1] ?? null;
   }
 
-  function waitForConversationId(timeoutMs = 30000) {
+  function waitForConversationId(timeoutMs = 30000, initialId = null) {
     return new Promise((resolve) => {
       const deadline = Date.now() + timeoutMs;
-      const initialPath = location.pathname;
 
       function check() {
         const id = getConversationIdFromUrl();
-        if (id && location.pathname !== initialPath) { resolve(id); return; }
+        if (id && id !== initialId) { resolve(id); return; }
         if (Date.now() > deadline) { resolve(null); return; }
         setTimeout(check, 200);
       }
@@ -737,7 +744,7 @@
       sendResponse({ ok: true });
 
       (async () => {
-        let titleTimer = null;
+        let titleTimer = null, libraryBinding = null;
         const bvidPrefix = msg.bvid ? `[${msg.bvid}] ` : '';
         console.log('[ext] CHATGPT_PREPARE_PROMPT received:',
           'file.name=', msg.file?.name,
@@ -774,6 +781,7 @@
           console.log('[ext] CHATGPT_PREPARE_PROMPT: file attached successfully, proceeding to send');
           showStatus('正在发送...');
           assertNotCancelled(msg.taskId);
+          if(!msg.tempChat&&(msg.videoTitle||msg.libraryEligible))libraryBinding=captureSubmittedConversation(findTextarea()?.value??findTextarea()?.textContent??'');
           await clickSend(msg.taskId, () => {
             const visible = getVisibleFileTiles();
             for (const tile of receipts) {
@@ -781,18 +789,21 @@
             }
           });
           reportTarget(msg, true);
+          if(msg.libraryEligible&&!msg.tempChat)chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId}).catch(()=>{});
           // Submission succeeded — hide the save button now regardless of what happens next
           hideSaveButton();
           if (msg.bgOpen) scrollToResponseOnTabFocus();
           // Rename the new conversation to the video title via the sidebar UI (skip for temporary chats)
-          if (msg.videoTitle && !msg.tempChat) {
-            const conversationId = await waitForConversationId();
+          if ((msg.videoTitle||msg.libraryEligible) && !msg.tempChat) {
+            const conversationId = await libraryBinding.promise;
             if (!conversationId) {
               clearInterval(titleTimer);
-              showError(`${bvidPrefix}修改会话名失败：等待对话 ID 超时`);
+              showError(`${bvidPrefix}总结请求已发送，但无法确认本次对话归属；未自动入书库或修改其他会话名`);
               showRetryRenameButton(null, msg.videoTitle);
               return;
             }
+            if(msg.libraryEligible)chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl:location.origin+'/c/'+conversationId}).catch(()=>{});
+            if(!msg.videoTitle){hideStatus();return;}
             showStatus('正在通过 API 修改会话名...');
             try {
               await renameConversationViaAPI(conversationId, msg.videoTitle);
@@ -819,7 +830,7 @@
           } else {
             showError(`${bvidPrefix}错误：${e.message}`);
           }
-        } finally { _taskActive = false; }
+        } finally { libraryBinding?.stop(); _taskActive = false; }
       })();
       return;
     }

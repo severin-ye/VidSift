@@ -37,7 +37,8 @@ const forceAIStudioLabelText = document.getElementById('forceAIStudioLabelText')
 const bgOpenCheckbox = document.getElementById('bgOpenCheckbox');
 
 // Restore checkbox state from localStorage (synchronous, no flicker)
-tempChatCheckbox.checked = localStorage.getItem('tempChat') !== 'false';
+tempChatCheckbox.checked = localStorage.getItem('tempChat') === 'true';
+document.getElementById('tempChatLabel').textContent=tempChatCheckbox.checked?'临时聊天·开':'临时聊天·关';
 forceAIStudioCheckbox.checked = localStorage.getItem('forceAIStudio') === 'true';
 bgOpenCheckbox.checked = localStorage.getItem('bgOpen') === 'true';
 document.getElementById('bgOpenLabel').textContent=bgOpenCheckbox.checked?'GPT后台打开·开':'GPT后台打开·关';
@@ -45,6 +46,7 @@ document.getElementById('bgOpenLabel').textContent=bgOpenCheckbox.checked?'GPT�
 // Save checkbox state on change
 tempChatCheckbox.addEventListener('change', () => {
   localStorage.setItem('tempChat', tempChatCheckbox.checked);
+  document.getElementById('tempChatLabel').textContent=tempChatCheckbox.checked?'临时聊天·开':'临时聊天·关';
 });
 
 // 根据 transcribeService 和字幕状态更新按钮文案与复选框文案
