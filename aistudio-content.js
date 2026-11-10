@@ -65,6 +65,8 @@
       else if (/上传失败/.test(message)) category='upload_failed';
       else if (/运行按钮/.test(message)) category='run_not_found';
       else if (/是否接受尚未确认/.test(message)) category='submission_unknown';
+      else if (/对话框/.test(message)) category='modal_blocked';
+      else if (/附件状态已改变/.test(message)) category='attachment_changed';
       else if (/转写|字幕|SRT|音频首尾/.test(message)) category='transcript_incomplete';
       else if (/加载超时/.test(message)) category='page_timeout';
       return {category,errorName:['Error','TypeError','RangeError','DOMException','AbortError'].includes(error?.name)?error.name:'Error'};
@@ -302,7 +304,8 @@
     return {
       turns: new Set(document.querySelectorAll('ms-chat-turn')),
       stop: new Set(Array.from(document.querySelectorAll('button')).filter(button =>
-        visibleControl(button) && /^(?:stop(?: generating| generation| running)?|停止(?:生成|运行)?)$/i.test(controlLabel(button).trim())))
+        visibleControl(button) && /^(?:stop(?: generating| generation| running)?|停止(?:生成|运行)?)$/i.test(
+          controlLabel(button).trim().replace(/\s+/g,' ').replace(/^(?:progress_activity|stop_circle|stop)\s+(?=stop\b|停止)/i,''))))
     };
   }
 
@@ -321,7 +324,7 @@
       if (verifyAttachments) verifyAttachments();
       const runBtn = findRunButton();
       if (isEnabled(runBtn)) {
-        if (document.querySelector('[role="dialog"], mat-dialog-container')) throw new Error('AI Studio 有未关闭的对话框，未自动发送');
+        if (Array.from(document.querySelectorAll('[role="dialog"], mat-dialog-container')).some(visibleControl)) throw new Error('AI Studio 有未关闭的对话框，未自动发送');
         const before = submissionSnapshot();
         assertNotCancelled(taskId);
         diagnostic(taskId,'run_click',diagnosticDOM());
@@ -372,11 +375,16 @@
       if (text !== lastText) { lastText = text; stableSince = Date.now(); }
       const generating = submissionSnapshot().stop.size > 0;
       diagnosticWait(taskId,'transcript_state',{...diagnosticDOM(),generating,hasResponse:!!text});
-      if (text && !generating && isEnabled(findRunButton()) && Date.now() - stableSince >= 1500) {
+      if (text && !generating && Date.now() - stableSince >= 1500) {
         assertNotCancelled(taskId);
         const transcript = VidSiftTranscript.parse(text, duration);
         diagnostic(taskId,'transcript_complete',{hasTranscript:!!transcript});
         return transcript;
+      }
+      const responseReady = turn && Array.from(turn.querySelectorAll('button')).some(button =>
+        visibleControl(button) && /^(?:good response|bad response|赞|踩)$/i.test(controlLabel(button).trim()));
+      if (!text && !generating && responseReady && Date.now() - stableSince >= 1500) {
+        throw Object.assign(new Error('AI Studio 已结束生成，但没有返回逐字稿；音频已保留，可在本页重试，无需重新下载'),{code:'AISTUDIO_EMPTY_RESPONSE'});
       }
       await sleep(250);
     }
@@ -427,7 +435,23 @@
     if (relayToChatGPT) {
       showStatus('AI Studio 正在转写，完成后将自动交给 GPT...');
       reportTranscribeTaskEvent('status', 'AI Studio 正在转写，等待完整字幕后交给 GPT。', biliTabId);
-      transcript = await waitForTranscript(beforeTurns, taskId, duration);
+      try {
+        transcript = await waitForTranscript(beforeTurns, taskId, duration);
+      } catch (error) {
+        // A confirmed finished empty answer is distinct from an uncertain Run,
+        // cancellation or partial transcript. Reuse the accepted conversation
+        // once, without downloading or attaching the same audio again.
+        if (error.code !== 'AISTUDIO_EMPTY_RESPONSE') throw error;
+        assertNotCancelled(taskId);
+        diagnostic(taskId,'transcript_retry',{category:'empty_response',count:1});
+        showStatus('AI Studio 返回空答复，正在使用已上传音频重试一次...');
+        reportTranscribeTaskEvent('status','AI Studio 返回空答复，正在使用已上传音频重试一次，无需重新下载。',biliTabId);
+        const retryBefore = new Set(document.querySelectorAll('ms-chat-turn'));
+        await typePrompt('上一轮没有返回任何可见逐字稿。请使用本对话已经上传的同一份音频，重新执行以下转写要求；不要重新上传附件，不输出思考过程。如无法完成，请明确说明原因和停止时间，不要返回空白。\n\n'+prompt);
+        assertNotCancelled(taskId);
+        await clickRunButton(30000,taskId);
+        transcript = await waitForTranscript(retryBefore,taskId,duration);
+      }
       reportTranscribeTaskEvent('status', '完整字幕已核验，正在交给 GPT。', biliTabId);
     } else {
       reportTranscribeTaskEvent('done', '已提交到 AI Studio，当前页面可再次发起新任务。', biliTabId);

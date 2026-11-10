@@ -1,4 +1,4 @@
-# 通用总结扩展（VidSift）5.2.4 独立测试版
+# 通用总结扩展（VidSift）5.2.5 独立测试版
 
 - 基于 bilibili-subtitle-to-chatgpt 改造，保留弹窗、自定义提示词、临时对话、后台打开及自动上传发送流程。
 - 本包使用独立 ID `kggdkncbamdlhhihfkeldbbkppkgihad`，可与原版 `nigiglinogpocaonjlenipdhhlmnkmee` 并存；不接替原版，不读取或迁移原版设置及模型缓存。
@@ -14,6 +14,8 @@
 - 设置页的书库联动块可单独开关、修改书库扩展ID、恢复本块默认、查看状态和重试；失败保留本地待办，不重发总结。封面缺失明确显示，待办保留以便后续补齐。
 - 默认书库ID为`ajjcbhalcgpmelnmlnheefbfikdgmjdp`，适用于当前既有安装；其他安装可从扩展管理页复制实际ID。不开启额外常驻服务或历史扫描。
 - 协议与保护边界见[设计原稿](设计对齐稿/视频总结与书库联动/2026-11-10%20视频总结自动入库.md)，实现与安装证据见[实施记录](docs/superpowers/plans/2026-11-10-video-library.md)；源码不代表日常浏览器已加载。
+
+- 5.2.5仅拦截可见的对话框；批注工具预置的隐藏编辑器不再阻止AI Studio自动运行，已安装Native5.2.4继续兼容。
 
 ## 内容处理
 

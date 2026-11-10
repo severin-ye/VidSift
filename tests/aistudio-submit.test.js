@@ -13,6 +13,7 @@ function harness() {
       if(selector==='button')return state.buttons;
       if(selector==='textarea')return [textarea];
       if(selector==='ms-chat-turn')return state.turns;
+      if(selector==='[role="dialog"], mat-dialog-container')return Array.isArray(state.dialog)?state.dialog:state.dialog?[state.dialog]:[];
       state.cardSelector=selector; return state.cards;
     },
     querySelector(selector){return selector.includes('dialog')?state.dialog:null;}
@@ -80,6 +81,11 @@ test('only a newly visible stop control confirms generation',async()=>{
   await h.api.clickRunButton(900,'task',undefined,600);assert.equal(h.sends,1);
 });
 
+test('current AI Studio progress icon does not hide the Stop generation receipt',async()=>{
+  const h=harness();h.state.buttons=[h.button('Run',{click(){h.state.buttons.push(h.button('progress_activity Stop'));}})];
+  await h.api.clickRunButton(900,'task',undefined,600);assert.equal(h.sends,1);
+});
+
 test('existing stop button alone cannot acknowledge an ignored new submission',async()=>{
   const h=harness();h.state.buttons=[h.button('Run'),h.button('Stop generating')];
   await assert.rejects(h.api.clickRunButton(900,'task',undefined,600),/是否接受尚未确认/);assert.equal(h.sends,1);
@@ -98,6 +104,19 @@ test('cancel, a changed prior receipt, or an open modal prevents submission',asy
 test('post-click cancellation never produces a second click',async()=>{
   const h=harness();h.state.buttons=[h.button('Run',{click(){h.cancel();}})];
   await assert.rejects(h.api.clickRunButton(900,'task',undefined,600),/取消/);assert.equal(h.sends,1);
+});
+
+test('hidden annotation dialog cannot block a prepared AI Studio submission',async()=>{
+  const h=harness();h.state.dialog={hidden:true,getClientRects(){return [];}};
+  h.state.buttons=[h.button('Run',{click(){h.state.turns.push({});}})];
+  await h.api.clickRunButton(900,'task',undefined,600);assert.equal(h.sends,1);
+});
+
+test('a hidden first dialog cannot hide a second visible blocking modal',async()=>{
+  const h=harness();h.state.buttons=[h.button('Run')];
+  h.state.dialog=[{hidden:true,getClientRects(){return [];}},{hidden:false,getClientRects(){return [{}];}}];
+  await assert.rejects(h.api.clickRunButton(900,'task',undefined,600),/对话框/);
+  assert.equal(h.sends,0);
 });
 
 function audioCard({name='Generated Audio November 9',tokens=true,play=true,busy=false,error=false}={}) {
@@ -172,6 +191,17 @@ test('relay waits for a new model response to finish and stabilize; old response
  let ticks=0;h.state.onTick=()=>{if(++ticks===3)h.state.buttons=[h.button('Run')];};
  const transcript=await h.api.waitForTranscript(new Set([old]),'task',10,5000);
  assert.match(transcript,/完整测试字幕/);assert.equal(transcript.includes('转写完成'),false);assert.ok(ticks>=6);
+});
+
+test('a cleared composer with disabled Run cannot hide a finished complete transcript',async()=>{
+ const h=harness();h.state.buttons=[h.button('Run',{disabled:true})];h.state.turns=[modelTurn(completeSRT)];
+ const result=await h.api.waitForTranscript(new Set(),'task',10,3000);assert.match(result,/完整测试字幕/);
+});
+
+test('an explicitly finished empty response fails clearly without another click or upload',async()=>{
+ const h=harness();h.state.buttons=[h.button('Run',{disabled:true})];
+ const turn=modelTurn('');turn.querySelectorAll=s=>s==='button'?[h.button('Good response',{aria:true})]:[];h.state.turns=[turn];
+ await assert.rejects(h.api.waitForTranscript(new Set(),'task',10,3000),/没有返回逐字稿.*无需重新下载/);assert.equal(h.sends,0);
 });
 test('relay ignores a newly created user turn even if it contains valid SRT',async()=>{
  const h=harness();h.state.buttons=[h.button('Run')];

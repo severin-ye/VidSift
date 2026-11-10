@@ -478,7 +478,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.2.4', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.2.5', 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
