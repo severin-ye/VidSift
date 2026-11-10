@@ -84,3 +84,13 @@ test('switching video while AI Studio generates prevents forwarding its transcri
  await assert.rejects(f.workflow.start({openerTabId:1,sourceUrl:url}),/源视频已切换/);
  assert.equal(f.sent.length,0);assert.deepEqual(f.released,['aud']);
 });
+
+test('workflow preserves raw title and subtitle filename while forwarding trusted platform',async()=>{
+ const raw='【YouTube】原题 #学习 @作者';
+ const f=fixture({subtitle:{body:[{from:0,to:1,content:'fixture'}]},images:[],videoId:'abc123XYZ_0',title:raw});
+ const task=f.workflow.start({openerTabId:1,sourceUrl:'https://www.youtube.com/watch?v=abc123XYZ_0'});
+ await new Promise(setImmediate);assert.equal(f.sent.length,1);
+ assert.equal(f.sent[0].videoTitle,raw);assert.equal(f.sent[0].source.title,raw);
+ assert.equal(f.sent[0].source.platform,'youtube');assert.equal(f.sent[0].file.name,'abc123XYZ_0_'+raw+'.srt');
+ f.complete();await task;
+});

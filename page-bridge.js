@@ -2,7 +2,7 @@
  'use strict';
  const configurations={
   bilibili:{name:'B站音频下载脚本',ping:'VIDSIFT_BILI_PING',files:['task-diagnostics.js','error-reporter.js','bilibili-content.js'],main:['bilibili-content-main.js'],accept:u=>u.protocol==='https:'&&u.hostname==='www.bilibili.com'&&(/^\/video\/BV\w+/.test(u.pathname)||u.pathname.startsWith('/list/'))},
-  chatgpt:{name:'ChatGPT上传脚本',ping:'VIDSIFT_CHATGPT_PING',main:['chatgpt-library-main.js'],files:['task-diagnostics.js','error-reporter.js','conversation-binding.js','attachment-utils.js','chatgpt-content.js'],accept:u=>u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)},
+  chatgpt:{name:'ChatGPT上传脚本',ping:'VIDSIFT_CHATGPT_PING',main:['chatgpt-library-main.js'],files:['task-diagnostics.js','error-reporter.js','conversation-binding.js','attachment-utils.js','conversation-title.js','chatgpt-content.js'],accept:u=>u.protocol==='https:'&&['chatgpt.com','chat.openai.com'].includes(u.hostname)},
   aistudio:{name:'AI Studio上传脚本',ping:'VIDSIFT_AISTUDIO_PING',files:['task-diagnostics.js','error-reporter.js','attachment-utils.js','aistudio-transcript.js','attachment-transfer.js','aistudio-content.js'],accept:u=>u.protocol==='https:'&&u.hostname==='aistudio.google.com'}
  };
  class PageBridge{

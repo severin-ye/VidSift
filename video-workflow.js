@@ -43,7 +43,7 @@
     await this.assertLive(task);
     if(d.normalize(msg.screenshotSettings).enabled && !(result.images||[]).length) throw new Error('图片提取未得到可用画面，已停止自动发送；可关闭图片提取后重试');
     if(result.frameInfo?.mode==='interval' && result.frameInfo.interval>d.normalize(msg.screenshotSettings).interval)status('STATUS','为覆盖全程并满足拼图上限，实际截图间隔已调整为 '+result.frameInfo.interval+' 秒');
-    const context={platform:result.platform,videoId:result.videoId,title:result.title||msg.source?.title||source.videoId,url:msg.sourceUrl,duration:result.duration,coverUrl:result.coverUrl||pageSource?.coverUrl||msg.source?.coverUrl||''};
+    const context={platform:result.platform||source.platform,videoId:result.videoId,title:result.title||msg.source?.title||source.videoId,url:msg.sourceUrl,duration:result.duration,coverUrl:result.coverUrl||pageSource?.coverUrl||msg.source?.coverUrl||''};
     const attachments=[];
     for(const image of result.images||[]){await this.assertLive(task);attachments.push(await task.client.readAsset(image.assetId));}
     let srt=msg.forceAudio?'':result.subtitle?.body?.length?d.toSrt(result.subtitle.body):'';

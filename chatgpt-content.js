@@ -820,6 +820,7 @@
 
       (async () => {
         let titleTimer = null, libraryBinding = null;
+        const conversationTitle = VidSiftConversationTitle.formatConversationTitle(msg.videoTitle, {...msg.source, videoId:msg.source?.videoId||msg.bvid});
         const bvidPrefix = msg.bvid ? `[${msg.bvid}] ` : '';
         console.log('[ext] CHATGPT_PREPARE_PROMPT received:',
           'file.name=', msg.file?.name,
@@ -828,11 +829,11 @@
           'bgOpen=', msg.bgOpen, 'tempChat=', msg.tempChat);
         let fileAttached = false;
         // Set tab title immediately so it doesn't stay on the default "ChatGPT" while we work
-        if (msg.videoTitle && !msg.tempChat) {
-          document.title = msg.videoTitle;
+        if (conversationTitle && !msg.tempChat) {
+          document.title = conversationTitle;
           titleTimer = setInterval(() => {
-            if (document.title !== msg.videoTitle) {
-              document.title = msg.videoTitle;
+            if (document.title !== conversationTitle) {
+              document.title = conversationTitle;
             }
           }, 200);
         }
@@ -840,8 +841,8 @@
           const attachments = VidSiftAttachments.normalizeMessage(msg);
           const subtitle = attachments.find(a => a.content !== undefined);
           if (subtitle) showSaveButton(subtitle.name, subtitle.content);
-          if (msg.videoTitle && !msg.tempChat) {
-            showRetryRenameButton(null, msg.videoTitle);
+          if (conversationTitle && !msg.tempChat) {
+            showRetryRenameButton(null, conversationTitle);
           }
           showStatus('正在添加字幕文件...');
           showStatus('正在输入提示词...');
@@ -857,7 +858,7 @@
           console.log('[ext] CHATGPT_PREPARE_PROMPT: file attached successfully, proceeding to send');
           showStatus('正在发送...');
           assertNotCancelled(msg.taskId);
-          if(!msg.tempChat&&(msg.videoTitle||msg.libraryEligible)){
+          if(!msg.tempChat&&(conversationTitle||msg.libraryEligible)){
             libraryBinding=captureSubmittedConversation(readComposerText(),msg.taskId);
             await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
           }
@@ -873,33 +874,33 @@
           hideSaveButton();
           if (msg.bgOpen) scrollToResponseOnTabFocus();
           // Rename the new conversation to the video title via the sidebar UI (skip for temporary chats)
-          if ((msg.videoTitle||msg.libraryEligible) && !msg.tempChat) {
+          if ((conversationTitle||msg.libraryEligible) && !msg.tempChat) {
             const conversationId = await libraryBinding.promise;
             if (!conversationId) {
               if(msg.libraryEligible)chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_UNCONFIRMED',taskId:msg.taskId}).catch(()=>{});
               clearInterval(titleTimer);
               showError(`${bvidPrefix}总结请求已发送，但无法确认本次对话归属；未自动入书库或修改其他会话名`);
-              showRetryRenameButton(null, msg.videoTitle);
+              showRetryRenameButton(null, conversationTitle);
               return;
             }
             if(msg.libraryEligible){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl:location.origin+'/c/'+conversationId});if(!receipt?.ok)throw new Error('总结已发送，但书库对话关系确认失败：'+(receipt?.error||'未收到回执'));}
-            if(!msg.videoTitle){hideStatus();return;}
+            if(!conversationTitle){hideStatus();return;}
             showStatus('总结已发送；正在等待 ChatGPT 标题，随后自动改为视频名...');
             try {
-              if (!await renameConversationViaAPI(conversationId, msg.videoTitle)) {
+              if (!await renameConversationViaAPI(conversationId, conversationTitle)) {
                 clearInterval(titleTimer);
                 showStatus(`${bvidPrefix}总结已发送；ChatGPT仍在等待标题，会话名待更新，可稍后只重试改名。`);
-                showRetryRenameButton(conversationId, msg.videoTitle);
+                showRetryRenameButton(conversationId, conversationTitle);
                 return;
               }
               hideRetryRenameButton();
               clearInterval(titleTimer);
-              document.title = msg.videoTitle;
+              document.title = conversationTitle;
             } catch (e) {
               clearInterval(titleTimer);
               console.error('[ext] renameConversationViaAPI failed:', e);
               showError(`${bvidPrefix}修改会话名失败：${e.message}`);
-              showRetryRenameButton(conversationId, msg.videoTitle);
+              showRetryRenameButton(conversationId, conversationTitle);
               return;
             }
           }
