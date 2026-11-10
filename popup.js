@@ -127,7 +127,7 @@ async function getActiveTranscribeTask(tabId) {
   statusTabId = tabId;
   try {
     const result = await chrome.runtime.sendMessage({ type: 'GET_TAB_TRANSCRIBE_STATUS', tabId });
-    if (!result) throw new Error('扩展后台未响应，请在扩展管理页重新加载通用总结扩展');
+    if (!result) throw new Error('扩展后台未响应，请在扩展管理页重新加载知行视频总结');
     return result;
   } catch (e) {
     throw new Error(`无法连接扩展后台：${e.message}`);
@@ -539,7 +539,7 @@ runBtn.addEventListener('click', run);
   } catch (e) {
     popupDiagnostic(popupDiagnosticId,'popup.initialization_failed',{errorName:e.name,category:'operation_failed'});
     showError(`扩展初始化失败：${e.message}`);
-    setStatus('请刷新视频页并重新打开扩展；若仍失败，请在扩展管理页重新加载通用总结扩展。');
+    setStatus('请刷新视频页并重新打开扩展；若仍失败，请在扩展管理页重新加载知行视频总结。');
     runBtn.disabled = true;
     runBtn.textContent = '初始化失败';
   }

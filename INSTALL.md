@@ -1,8 +1,8 @@
-# 安装独立通用总结扩展（VidSift）
+# 安装独立知行视频总结（VidSift）
 
 - 先把ZIP解压到固定目录，例如 `%LOCALAPPDATA%\VidSift\extension\5.2.6`；不要从临时解压目录加载。
 - 在Chrome的 `chrome://extensions` 或Edge的 `edge://extensions` 中，按浏览器提供的开发者加载流程选择“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录；需要的浏览器权限由用户在界面确认。
-- 核对名称通用总结扩展、版本5.2.6、ID `kggdkncbamdlhhihfkeldbbkppkgihad`；原扩展可以保留，不需要卸载、关闭或替换。
+- 核对名称知行视频总结、版本5.2.6、ID `kggdkncbamdlhhihfkeldbbkppkgihad`；原扩展可以保留，不需要卸载、关闭或替换。
 - 两扩展同时启用时各自响应各自弹窗；执行任务时只操作其中一个弹窗，以免人为启动两个相同任务。
 - 从5.0.2起使用 `scripting` 权限，在已授权视频页或目标网站补载缺失脚本并读取当前作品资源；如浏览器要求确认，请在扩展管理页确认后重新加载，并刷新视频页。
 

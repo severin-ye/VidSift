@@ -16,7 +16,7 @@ try {
   $resolved=[IO.Path]::GetFullPath($stage)
   if(!$resolved.StartsWith([IO.Path]::GetFullPath($dist).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Unsafe package stage'}
   $oldManifest=Join-Path $stage 'manifest.json'
-  if(!(Test-Path -LiteralPath $oldManifest) -or (Get-Content $oldManifest -Raw|ConvertFrom-Json).name -notin @('VidSift','通用总结扩展')){throw 'Refusing to replace an unrecognized stage'}
+  if(!(Test-Path -LiteralPath $oldManifest) -or (Get-Content $oldManifest -Raw|ConvertFrom-Json).name -notin @('VidSift','通用总结扩展','知行视频总结')){throw 'Refusing to replace an unrecognized stage'}
   Remove-Item -LiteralPath $resolved -Recurse -Force
  }
  New-Item -ItemType Directory -Force -Path $stage | Out-Null
