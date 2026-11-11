@@ -2,6 +2,7 @@
 param([switch]$DryRun)
 $ErrorActionPreference='Stop'
 $project=Split-Path $PSScriptRoot -Parent
+. (Join-Path $PSScriptRoot 'gstack-check.ps1')
 function Invoke-ReleaseStep([string]$program,[string[]]$releaseArguments){
  & $program @releaseArguments
  if($LASTEXITCODE -ne 0){throw "$program failed with exit code $LASTEXITCODE; release stopped"}
@@ -33,7 +34,7 @@ try {
   $tagged=(& git rev-parse "$tag^{commit}")
   if($tagged -ne $head){throw 'Version tag already belongs to another commit; increment the version rather than replace it'}
  }
- Invoke-ReleaseStep npm @('run','check')
+ Invoke-GstackCheck -Label 'vidsift-release-check' -Command 'npm.cmd run check'
  & (Join-Path $project 'tests/package.test.ps1')
  if(!$?){throw 'ZIP integrity checks failed'}
  $releaseToken=$previousToken

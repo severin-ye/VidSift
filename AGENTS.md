@@ -9,3 +9,7 @@
 - 本仓库实现优先复用已有诊断、任务和书库状态，不另造日志服务器、轮询器或 Codex 全局规则；这些说明是 Agent 的操作约定，不声称能强制宿主自动执行。
 - 修改诊断/捕获时运行相关 Node 测试和 `py -3 -m unittest discover -s tests/native -p test_diagnostics_cli.py -v`；修改跨页面接入时使用 `tests/browser-errors.cjs` 的隔离浏览器验收，并明确模拟 API 与真实站点的证据边界。
 - 多聊天同时更新此扩展时，核对已有安装协调者和已提交补丁，只由约定的一个协调者替换日常加载目录；保留提示词、书库、配置和回退条件。
+
+## 发布通用检查
+
+发布检查使用[既有发布入口与gstack检查边界](docs/gstack-release-checks.md)；gstack管理所选通用检查及凭据，原生打包、数据保护及真实安装验收保留。不得在gstack缺失或凭据未通过时改回直接通用检查冒充发布通过。

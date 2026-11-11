@@ -338,3 +338,5 @@ npm run release
 - 项目基于 [ayanamist/bilibili-subtitle-to-chatgpt](https://github.com/ayanamist/bilibili-subtitle-to-chatgpt) 改造，保留原版的字幕处理、提示词设置和网页交接基础。
 - 本机媒体处理参考了 [JefferyHcool/BiliNote](https://github.com/JefferyHcool/BiliNote)，采用内容与许可记录见 [native/THIRD_PARTY.md](native/THIRD_PARTY.md)。
 - 第三方来源说明见 [THIRD_PARTY.md](THIRD_PARTY.md)，原版 README 见 [docs/README.upstream.md](docs/README.upstream.md)。
+
+开发发布的通用检查由gstack管理，原生包与上传核验保持；见[发布通用检查](docs/gstack-release-checks.md)。
