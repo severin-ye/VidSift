@@ -14,6 +14,6 @@ function Invoke-GstackCheck {
   if($LASTEXITCODE -ne 0) { throw "gstack check failed: $Label ($LASTEXITCODE)" }
   # run is transparent on bookkeeping failures, so the explicit freshness check
   # is necessary before the caller may package or publish.
-  & bun --no-env-file --config=NUL $evidence check --label $Label --expect-cmd $exactCommand
+  & bun --no-env-file --config=NUL $evidence check --label $Label --max-age 24 --expect-cmd $exactCommand
   if($LASTEXITCODE -ne 0) { throw "gstack evidence is missing or stale: $Label" }
 }
