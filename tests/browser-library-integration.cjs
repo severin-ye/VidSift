@@ -24,7 +24,7 @@ async function refresh(page){await page.locator('#refresh').click();await page.w
 (async()=>{
  try{
  context=await chromium.launchPersistentContext(profile,{headless:true,channel:process.env.VIDSIFT_BROWSER_CHANNEL||'msedge',args:['--disable-extensions-except='+[extension,receiverFixture].join(','),'--load-extension='+[extension,receiverFixture].join(',')]});
- await context.route('https://api.bilibili.com/**',route=>route.fulfill({json:{code:0,data:{bvid:'BV1uLpn6AEtS',pic:'https://i0.hdslb.com/fixture.jpg',title:'联动验收视频'}}}));
+ await context.route('https://api.bilibili.com/**',route=>route.fulfill({json:{code:0,data:{bvid:'BV1uLpn6AEtS',pic:'http://i0.hdslb.com/fixture.jpg',title:'联动验收视频'}}}));
  await context.route('https://i0.hdslb.com/**',route=>route.fulfill({contentType:'image/png',body:png}));
  await context.route('https://www.bilibili.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>联动验收视频</title><main>合成视频页</main>'}));
  await context.route('https://chatgpt.com/**',route=>{const u=new URL(route.request().url());return route.fulfill(u.pathname==='/api/auth/session'?{json:{accessToken:'synthetic-test-token'}}:u.pathname==='/backend-api/f/conversation'?{contentType:'text/event-stream',body:'data: '+JSON.stringify({conversation_id:cid})+'\n\n'}:u.pathname.startsWith('/backend-api/')?{json:{title:'联动验收视频'}}:{contentType:'text/html',body:chatHTML});});
@@ -36,6 +36,7 @@ async function refresh(page){await page.locator('#refresh').click();await page.w
  const popup=await context.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);assert.equal(await popup.locator('#tempChatCheckbox').isChecked(),false);await popup.close();report.checks.push('ordinary chat is the default');
  const source=await context.newPage();await source.goto(video);const target=await context.newPage();await target.goto('https://chatgpt.com/');
  const targetTab=await tabs(control,'https://chatgpt.com/'),sourceTab=await tabs(control,video);assert(targetTab&&sourceTab);
+ await source.close();report.checks.push('source tab closes before cover registration; HTTP metadata must supply the HTTPS cover');
  const prepared=await worker.evaluate(async ({taskId,targetTabId,openerTabId,url})=>prepareVideoLibraryTask({taskId,targetTabId,openerTabId,source:{url},videoTitle:'联动验收视频',tempChat:false}),{taskId:'integration-normal',targetTabId:targetTab.id,openerTabId:sourceTab.id,url:video});assert.equal(prepared,true);
  await control.evaluate(async ({tabId})=>chrome.tabs.sendMessage(tabId,{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',taskId:'integration-normal',libraryEligible:true,tempChat:false,videoTitle:'联动验收视频',source:{url:'https://www.bilibili.com/video/BV1uLpn6AEtS'},file:{name:'fixture.srt',content:'1\n00:00:00,000 --> 00:00:02,000\nSynthetic transcript.'},prompt:'First paragraph\n\nSecond paragraph\n\nThird paragraph'}),{tabId:targetTab.id});
  await target.waitForURL('**/c/'+cid,{timeout:20000});

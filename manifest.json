@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "知行视频总结",
-  "version": "5.8.0",
+  "version": "5.8.1",
   "description": "提取 B站、YouTube、抖音字幕或音频，可选图片拼图，发送到 ChatGPT / AI Studio",
   "background": {
     "service_worker": "background.js"

@@ -58,6 +58,12 @@ test('cover download refuses off-platform, svg, oversized and redirects',async()
  await assert.rejects(()=>lib.downloadCover('https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg',fetcher));
 });
 
+test('cover normalization upgrades only platform images and preserves download restrictions',()=>{
+ assert.equal(lib.normalizeCover('http://i1.hdslb.com/a.jpg'),'https://i1.hdslb.com/a.jpg');
+ for(const url of ['http://evil.test/a.jpg','http://user@i1.hdslb.com/a.jpg','http://i1.hdslb.com:8080/a.jpg','file:///a.jpg','javascript:alert(1)','//i1.hdslb.com/a.jpg'])assert.equal(lib.normalizeCover(url),'');
+ assert.equal(lib.allowedCover('http://i1.hdslb.com/a.jpg'),false);
+});
+
 test('missing covers rotate fairly instead of starving the sixth saved card',async()=>{
  const f=fixture(),bridge=new lib.VideoLibraryBridge(f.api,{cover:async()=>''});
  for(let i=0;i<6;i++){const id=String(i)+'1111111-2222-4333-8444-555555555555';await bridge.register({taskId:String(i),tabId:i,source,tempChat:false});await bridge.submitted(String(i),{tab:{id:i}});await bridge.confirmed(String(i),{tab:{id:i}},'https://chatgpt.com/c/'+id);}

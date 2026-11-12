@@ -8,15 +8,16 @@ async function prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,ope
   const tabId=legacyTask?.tabId??openerTabId;
   if(!info?.url&&Number.isInteger(tabId))info={...info,url:(await chrome.tabs.get(tabId)).url};
   info=VidSiftVideoLibrary.normalizeSource({...info,title:videoTitle||info?.title});
+  info.coverUrl=VidSiftVideoLibrary.normalizeCover(info.coverUrl);
   if(info.platform==='youtube')info.coverUrl='https://i.ytimg.com/vi/'+info.videoId+'/hqdefault.jpg';
   if(info.platform==='bilibili'){
-   try{const response=await fetch('https://api.bilibili.com/x/web-interface/view?bvid='+encodeURIComponent(info.videoId),{credentials:'omit',signal:AbortSignal.timeout(5000)});const result=await response.json();if(response.ok&&result.code===0&&result.data?.bvid===info.videoId){info.coverUrl=result.data.pic||'';if(!videoTitle)info.title=result.data.title||info.title;}}catch{}
+   try{const response=await fetch('https://api.bilibili.com/x/web-interface/view?bvid='+encodeURIComponent(info.videoId),{credentials:'omit',signal:AbortSignal.timeout(5000)});const result=await response.json();if(response.ok&&result.code===0&&result.data?.bvid===info.videoId){info.coverUrl=VidSiftVideoLibrary.normalizeCover(result.data.pic)||info.coverUrl;if(!videoTitle)info.title=result.data.title||info.title;}}catch{}
   }
   if(!info.coverUrl&&Number.isInteger(tabId)){
    try{
     const result=await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},func:()=>({url:location.href,coverUrl:document.querySelector('video[poster]')?.poster||document.querySelector('meta[property="og:image"]')?.content||''})});
     const snapshot=result[0]?.result;
-    if(snapshot&&VidSiftPlatforms.identify(snapshot.url)?.key===VidSiftPlatforms.identify(info.url)?.key)info.coverUrl=snapshot.coverUrl;
+    if(snapshot&&VidSiftPlatforms.identify(snapshot.url)?.key===VidSiftPlatforms.identify(info.url)?.key)info.coverUrl=VidSiftVideoLibrary.normalizeCover(snapshot.coverUrl);
    }catch{}
   }
   if(info.platform==='bilibili'&&VidSiftVideoLibrary.allowedCover(info.coverUrl)&&!info.coverUrl.includes('@'))info.coverUrl+='@640w_360h_1c.jpg';

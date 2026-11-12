@@ -31,6 +31,9 @@
  function allowedCover(value){
   try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&['hdslb.com','ytimg.com','ggpht.com','douyinpic.com','douyincdn.com','byteimg.com','ibytedtos.com','pstatp.com'].some(d=>u.hostname===d||u.hostname.endsWith('.'+d));}catch{return false;}
  }
+ function normalizeCover(value){
+  try{const u=new URL(value);if(u.protocol==='http:')u.protocol='https:';return allowedCover(u.href)?u.href:'';}catch{return '';}
+ }
  async function downloadCover(url,fetcher=root.fetch){
   if(!allowedCover(url))throw Error('封面来源不在视频平台图片范围内');
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),8000);let reader;
@@ -97,5 +100,5 @@
    return this.status();
   }
  }
- const api={DEFAULTS,SETTINGS_KEY,STATE_KEY,settings,conversationUrl,normalizeSource,makeRecord,allowedCover,downloadCover,VideoLibraryBridge};root.VidSiftVideoLibrary=api;if(typeof module!=='undefined')module.exports=api;
+ const api={DEFAULTS,SETTINGS_KEY,STATE_KEY,settings,conversationUrl,normalizeSource,makeRecord,allowedCover,normalizeCover,downloadCover,VideoLibraryBridge};root.VidSiftVideoLibrary=api;if(typeof module!=='undefined')module.exports=api;
 })(globalThis);
