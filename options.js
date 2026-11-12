@@ -247,6 +247,7 @@ chrome.runtime.onMessage.addListener((msg) => {
 })();
 
 // ---- 音频转写服务来源选择 ----
+const radioGroq = document.getElementById('radioGroq');
 const radioAIStudio = document.getElementById('radioAIStudio');
 const radioSelfHosted = document.getElementById('radioSelfHosted');
 const radioLocal = document.getElementById('radioLocal');
@@ -277,6 +278,8 @@ function updateSelfHostedSectionVisibility() {
   testLocalBtn.style.display = isLocal ? '' : 'none';
   testServiceBtn.style.display = isSelfHosted ? '' : 'none';
 }
+
+radioGroq.addEventListener('change', async()=>{if(radioGroq.checked){await chrome.storage.local.set({transcribeService:'groq',transcriptionDefaultsVersion:1});updateSelfHostedSectionVisibility();}});
 
 radioAIStudio.addEventListener('change', async () => {
   if (radioAIStudio.checked) {
@@ -598,7 +601,8 @@ async function init() {
   saveAIStudioBtn.disabled = false;
   resetAIStudioBtn.disabled = false;
 
-  // 加载自建服务配置
+  // 共用唯一转写方式配置，保留显式选择。
+  await DouyinLocalSettings.migrate(chrome.storage.local);
   const result = await chrome.storage.local.get([
     'selfHostedApiUrl',
     'selfHostedApiToken',
@@ -634,12 +638,14 @@ async function init() {
   // 恢复并发数
   localConcurrencyInput.value = Math.max(1, Math.min(8, parseInt(result.localConcurrency, 10) || 1));
 
-  // 默认 AI Studio
-  const service = result.transcribeService || 'aistudio';
+  // 默认 Groq，后续显式选择继续保留。
+  const service = result.transcribeService || 'groq';
   if (service === 'selfhosted') {
     radioSelfHosted.checked = true;
   } else if (service === 'local') {
     radioLocal.checked = true;
+  } else if(service==='groq'){
+    radioGroq.checked = true;
   } else {
     radioAIStudio.checked = true;
   }

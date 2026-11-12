@@ -737,23 +737,27 @@ class LocalAudioCache:
 
     @staticmethod
     def descriptor(entry):
-        return {key: entry[key] for key in ('fingerprint', 'videoId', 'duration', 'sampleRate')}
+        return {**{key: entry[key] for key in ('fingerprint', 'videoId', 'duration', 'sampleRate')}, 'platform': entry.get('platform', 'douyin')}
 
-    def add(self, source, video_id, duration, settings):
+    def add(self, source, video_id, duration, settings, platform='douyin'):
         settings = local_settings(settings)
-        if not isinstance(video_id, str) or not re.fullmatch(r'\d+', video_id): raise ValueError('本地音频作品编号无效')
+        if platform not in ('douyin', 'bilibili', 'youtube'): raise ValueError('本地音频平台无效')
+        pattern = r'\d+' if platform == 'douyin' else r'[A-Za-z0-9_-]{1,128}'
+        if not isinstance(video_id, str) or not re.fullmatch(pattern, video_id): raise ValueError('本地音频作品编号无效')
         if not positive_number(duration) or duration > settings['maxDuration']: raise ValueError('本地音频超过时长限制')
         size = source.stat().st_size
         if size > settings['maxSourceBytes'] or size > settings['cacheBytes']: raise ValueError('本地音频超过文件或缓存大小限制')
         source_hash = file_hash(source)
-        fingerprint = hashlib.sha256((video_id + ':' + source_hash).encode()).hexdigest()
+        # Keep legacy Douyin fingerprints readable by the previous Native host.
+        identity = video_id if platform == 'douyin' else platform + ':' + video_id
+        fingerprint = hashlib.sha256((identity + ':' + source_hash).encode()).hexdigest()
         with self.transaction():
             output = self.root / (fingerprint + '.media')
             self._cleanup(time.time(), max(0, settings['cacheBytes'] - (0 if output.exists() else size)))
             retained = sum(path.stat().st_size for path in self.root.glob('*.media') if path != output)
             if retained + size > settings['cacheBytes']:
                 raise ValueError('活动音频租约占满缓存，请稍后重试')
-            entry = {'fingerprint': fingerprint, 'videoId': video_id, 'sha256': source_hash, 'duration': duration, 'sampleRate': 16000, 'size': size, 'settings': settings, 'updated': time.time(), 'status': 'failed', 'leases': {}}
+            entry = {'fingerprint': fingerprint, 'platform': platform, 'videoId': video_id, 'sha256': source_hash, 'duration': duration, 'sampleRate': 16000, 'size': size, 'settings': settings, 'updated': time.time(), 'status': 'failed', 'leases': {}}
             if output.exists():
                 if file_hash(output) != source_hash: raise ValueError('本地音频缓存校验失败')
                 try: entry['leases'] = self.load(fingerprint)['leases']
@@ -767,10 +771,11 @@ class LocalAudioCache:
             self._cleanup(time.time(), settings['cacheBytes'])
             return self.descriptor(entry)
 
-    def claim(self, fingerprint, video_id):
+    def claim(self, fingerprint, video_id, platform='douyin'):
         with self.transaction():
             entry = self.load(fingerprint)
             if entry['videoId'] != video_id: raise ValueError('本地音频作品编号不匹配')
+            if entry.get('platform', 'douyin') != platform: raise ValueError('本地音频平台不匹配')
             self._verify(entry)
             ttl = entry['settings']['successTtlHours' if entry['status'] == 'success' else 'failureTtlHours'] * 3600
             if not entry['leases'] and time.time() - entry['updated'] > ttl: raise ValueError('本地音频缓存已过期')
@@ -994,7 +999,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.5.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.8.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
@@ -1061,6 +1066,7 @@ class Service:
             pin = cache.pin_window(fingerprint)
             path, entry = cache.lookup(fingerprint)
             if entry['videoId'] != request.get('videoId'): raise ValueError('Groq 音频作品编号不匹配')
+            if entry.get('platform', 'douyin') != request.get('platform', 'douyin'): raise ValueError('Groq 音频平台不匹配')
             cache._verify(entry)
             input_bytes = path.stat().st_size
             if input_bytes > GROQ_UPLOAD_LIMIT:
@@ -1402,7 +1408,6 @@ class Service:
         local_config = local_settings(request.get('localSettings')) if local else None
         local_descriptor = None
         if local:
-            if platform != 'douyin': raise ValueError('本地转写目前仅用于抖音')
             job.max_source_bytes = local_config['maxSourceBytes']
         task = self.store.new_task(job.id)
         try:
@@ -1466,8 +1471,8 @@ class Service:
                     media_source['audioUrl'] = info['_douyin_audio_url']
                 (task / 'douyin-source.json').write_text(json.dumps(media_source), encoding='utf-8')
             result = {'subtitleStatus': 'available' if subtitle else info.get('_subtitle_status', 'unknown'), 'platform': platform, 'videoId': video_id, 'title': str(source.get('title') or info.get('title') or video_id), 'duration': duration, 'subtitle': subtitle, 'audio': None, 'images': [], 'frameInfo': {'mode': 'disabled', 'interval': settings.interval, 'frameCount': 0, 'collageCount': 0}, 'warnings': warnings}
-            need_audio = local or force or (request.get('needAudio') is True and not subtitle)
-            if local and (duration > local_config['maxDuration'] or not video_id):
+            need_audio = force or (not subtitle and (local or request.get('needAudio') is True))
+            if local and need_audio and (duration > local_config['maxDuration'] or not video_id):
                 raise ValueError('本地转写作品编号无效或超过时长限制')
             if (settings.enabled or need_audio) and duration <= 0:
                 raise ValueError('无法确认视频时长，已停止下载；暂不支持直播或时长未知的视频')
@@ -1494,7 +1499,7 @@ class Service:
                 actual_duration = int(match[1]) * 3600 + int(match[2]) * 60 + float(match[3])
                 if abs(actual_duration - duration) > max(2, duration * .01):
                     raise ValueError('本地原始音轨时长与当前作品不一致')
-                local_descriptor = self.local_audio.add(video, video_id, actual_duration, local_config)
+                local_descriptor = self.local_audio.add(video, video_id, actual_duration, local_config, platform=platform)
                 job.check()
                 cached, _ = self.local_audio.lookup(local_descriptor['fingerprint'])
                 result['localAudio'] = local_descriptor
@@ -1574,7 +1579,7 @@ class Host:
             elif action == 'groq_store_key':
                 result = groq_store_key(request, job)
             elif action == 'prepare_local_audio':
-                result = self.service.local_audio.claim(request.get('fingerprint'), request.get('videoId'))
+                result = self.service.local_audio.claim(request.get('fingerprint'), request.get('videoId'), request.get('platform', 'douyin'))
                 job.check()
             elif action == 'local_audio_finish':
                 result = self.service.local_audio.finish(request.get('fingerprint'), request.get('status'))

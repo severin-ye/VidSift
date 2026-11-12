@@ -129,9 +129,13 @@ async function startVideoSummary(msg,notify){
  const task=_legacyGuard.begin(tabId,msg.sourceUrl);task.diagnosticId=msg.diagnosticId;
  diagnoseTask(task,'task.started');
  _setActiveTranscribeTask(tabId,'video','已接收视频，正在后台取得字幕...');
- try{
-  const stored=await chrome.storage.local.get(['selfHostedApiUrl','selfHostedApiToken']);
-  Object.assign(msg,{selfHostedUrl:stored.selfHostedApiUrl,selfHostedToken:stored.selfHostedApiToken});
+ const configuration=(async()=>{await DouyinLocalSettings.migrate(chrome.storage.local);return chrome.storage.local.get(['selfHostedApiUrl','selfHostedApiToken','transcribeService','localModel','localDevice','douyinLocalSettings','groqSettings']);})();
+ configuration.catch(()=>{});
+ task.summaryQueued=true;msg.summaryQueued=true;
+ try{return await runSummaryJob({legacyTask:task,biliTabId:tabId},async()=>{
+  await _legacyGuard.check(task);
+  const stored=await configuration,selected=DouyinLocalSettings.resolve(source.platform,stored);
+  Object.assign(msg,{transcribeService:selected.service,model:selected.model,device:selected.device,localSettings:selected.settings,groqSettings:selected.groq,selfHostedUrl:stored.selfHostedApiUrl,selfHostedToken:stored.selfHostedApiToken});
   if(source.platform!=='bilibili'){
    await _legacyGuard.check(task);msg.sourceClosed=task.sourceClosed===true;
    finishLegacyTask(task);return await _videoWorkflow.start(msg,notify);
@@ -156,7 +160,7 @@ async function startVideoSummary(msg,notify){
    finishLegacyTask(task);
    return await _videoWorkflow.start(msg,notify);
   }
- }finally{finishLegacyTask(task);}
+ });}finally{finishLegacyTask(task);}
 }
 chrome.runtime.onConnect.addListener(port=>{
  if(port.name!=='vidsift-video')return;
@@ -164,16 +168,7 @@ chrome.runtime.onConnect.addListener(port=>{
  port.onMessage.addListener(msg=>{
   if(msg.type!=='START_VIDEO_TASK')return;
   const notify=(type,text)=>{overlayMsg(msg.openerTabId,{type:type==='ERROR'?'EXT_ERROR':'EXT_STATUS',text});if(connected)try{port.postMessage({type,text});}catch{}};
-  (async()=>{
-   const platform=VidSiftPlatforms.identify(msg.sourceUrl)?.platform;
-   if(platform==='douyin'){
-    const stored=await chrome.storage.local.get(['transcribeService','localModel','localDevice','douyinTranscribeService','douyinLocalSettings','groqSettings']);
-    const selected=DouyinLocalSettings.resolve(platform,stored);
-    Object.assign(msg,{transcribeService:selected.service,model:selected.model,device:selected.device,localSettings:selected.settings,groqSettings:selected.groq});
-    if(stored.douyinTranscribeService===undefined)await chrome.storage.local.set({douyinTranscribeService:'groq'});
-   }
-   await startVideoSummary(msg,notify);
-  })().catch(e=>notify('ERROR',e.message));
+  startVideoSummary(msg,notify).catch(e=>notify('ERROR',e.message));
  });
 });
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{

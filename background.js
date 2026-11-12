@@ -439,8 +439,13 @@ function updateSummaryQueue(){
 }
 async function _openChatGPTAndSend(data){
   const task=data.legacyTask||data.task;
+  if(task?.summaryQueued)return _dispatchChatGPTAndSend(data);
+  return runSummaryJob(data,()=>_dispatchChatGPTAndSend(data));
+}
+function runSummaryJob(data,run){
+  const task=data.legacyTask||data.task;
   return new Promise((resolve,reject)=>{
-    _summaryQueue.push({task,sourceTabId:data.biliTabId,resolve,reject,data});
+    _summaryQueue.push({task,sourceTabId:data.biliTabId,resolve,reject,data,run});
     updateSummaryQueue();void drainSummaryQueue();
   });
 }
@@ -453,8 +458,8 @@ async function drainSummaryQueue(){
       updateSummaryQueue();const job=_summaryQueue[0];
       try{
         if(job.task?.cancelled)throw new Error('视频任务已取消，已跳过排队项');
-        const result=await _dispatchChatGPTAndSend(job.data);
-        if(result.ok&&result.completion)await result.completion;
+        const result=await job.run();
+        if(result?.ok&&result.completion)await result.completion;
         job.resolve(result);
       }catch(error){job.reject(error);}
       finally{_summaryQueue.shift();}

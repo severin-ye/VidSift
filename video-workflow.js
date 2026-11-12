@@ -20,7 +20,7 @@
    const d=this.deps,tabId=msg.openerTabId,source=d.identify(msg.sourceUrl);
    if(!source)throw new Error('当前页面不是支持的视频页面');
    if(this.tasks.has(tabId)||d.existing(tabId))throw new Error('当前视频已有任务进行中，请等待或取消');
-   const task={tabId,source,id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,sourceClosed:msg.sourceClosed===true,cancelled:false,controller:new AbortController()};
+   const task={tabId,source,id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,summaryQueued:msg.summaryQueued===true,sourceClosed:msg.sourceClosed===true,cancelled:false,controller:new AbortController()};
    this.tasks.set(tabId,task);d.lock(tabId,'video','正在提取视频内容...');
    const log=(stage,value)=>{try{d.diagnostic?.(task,stage,value);}catch{}};log('task.started');
    const status=(type,text)=>{if(this.tasks.get(tabId)===task)d.lock(tabId,'video',text);notify(type,text);};let assets=[],localAudio,localOutcome='failed';
@@ -34,7 +34,7 @@
      await this.assertLive(task);
      if(!pageSource)status('STATUS','当前页面未提供完整原视频地址，改用限时解析...');
     }
-    const local=source.platform==='douyin'&&['local','groq'].includes(msg.transcribeService);
+    const local=msg.transcribeService==='groq'||source.platform==='douyin'&&msg.transcribeService==='local';
     let result;
     if(local&&!d.normalize(msg.screenshotSettings).enabled&&d.loadLocalMedia){result=await d.loadLocalMedia(task,pageSource);await this.assertLive(task);if(result){log('local.media_reused');status('STATUS','已核验并复用本作品的完整音频，不重新下载');}}
     if(!result){
@@ -59,7 +59,7 @@
     const common={...msg,taskId:task.id,biliTabId:tabId,videoTitle:context.title,bvid:context.videoId,source:context,localAudio,task};
     if(!srt){
      if(!result.audio&&!localAudio)throw new Error('未取得可用字幕或完整音频，请检查视频访问权限');
-     if(source.platform==='douyin'&&['local','groq'].includes(msg.transcribeService)){
+     if(msg.transcribeService==='groq'||source.platform==='douyin'&&msg.transcribeService==='local'){
       if(!localAudio)throw new Error('本机媒体程序不支持当前音轨转写，请更新本包本机程序');
       if(msg.transcribeService==='local'&&typeof task.client.readPcmWindow!=='function')throw new Error('本机媒体程序不支持分段本地转写，请更新本包本机程序');
       log(msg.transcribeService==='groq'?'groq.prepare':'local.start',{duration:result.duration});

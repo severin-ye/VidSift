@@ -18,17 +18,20 @@
  }
  function normalize(value){try{return validate(value||{});}catch{return {...defaults};}}
  function resolve(platform,stored={}){
-  const globalService=stored.transcribeService||'aistudio';
-  if(platform!=='douyin')return {service:globalService,model:stored.localModel||null,device:stored.localDevice||null};
-  const choice=services.has(stored.douyinTranscribeService)?stored.douyinTranscribeService:'groq';
-  const settings=normalize(stored.douyinLocalSettings),service=choice==='global'?globalService:choice;
-  return {service,model:choice==='global'?stored.localModel||settings.model:settings.model,device:choice==='global'?stored.localDevice||settings.device:settings.device,settings,groq:normalizeGroq(stored.groqSettings)};
+  const service=stored.transcribeService||'groq',settings=normalize(stored.douyinLocalSettings);
+  return {service,model:platform==='douyin'?settings.model:stored.localModel||null,device:platform==='douyin'?settings.device:stored.localDevice||null,settings,groq:normalizeGroq(stored.groqSettings)};
+ }
+ async function migrate(storage){
+  const stored=await storage.get(['transcribeService','douyinTranscribeService','transcriptionDefaultsVersion']);
+  if(stored.transcriptionDefaultsVersion===1)return;
+  // The 5.8 default applies once; later explicit selections remain authoritative.
+  await storage.set({transcribeService:'groq',douyinTranscribeService:'global',transcriptionDefaultsVersion:1});
  }
  async function save(storage,service,value,groq){
   if(!services.has(service))throw Error('抖音转写方式无效');const settings=validate(value);
-  await storage.set({douyinTranscribeService:service,douyinLocalSettings:settings,...(groq?{groqSettings:validateGroq(groq)}:{})});return settings;
+  await storage.set({transcribeService:service==='global'?'groq':service,douyinTranscribeService:'global',transcriptionDefaultsVersion:1,douyinLocalSettings:settings,...(groq?{groqSettings:validateGroq(groq)}:{})});return settings;
  }
  async function restore(storage){return save(storage,'groq',defaults,groqDefaults);}
- const api={defaults,models,validate,normalize,resolve,save,restore,groqDefaults,validateGroq,normalizeGroq};root.DouyinLocalSettings=api;
+ const api={defaults,models,validate,normalize,resolve,save,restore,migrate,groqDefaults,validateGroq,normalizeGroq};root.DouyinLocalSettings=api;
  if(typeof module!=='undefined')module.exports=api;
 })(globalThis);

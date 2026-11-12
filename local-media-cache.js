@@ -6,11 +6,11 @@
   _update(fn){const work=this.queue.catch(()=>{}).then(async()=>{const raw=(await this.storage.get(KEY))[KEY]||{};const state={...raw};const result=await fn(state);await this.storage.set({[KEY]:state});return result;});this.queue=work.catch(()=>{});return work;}
   async load(task,pageSource){
    const saved=(await this.storage.get(KEY))[KEY]?.[task.source.key];
-   if(!saved||saved.expiresAt<=Date.now()||saved.result?.videoId!==task.source.videoId||!saved.result.localAudio||typeof task.client.prepareLocalAudio!=='function')return null;
+   if(!saved||saved.expiresAt<=Date.now()||saved.result?.videoId!==task.source.videoId||!saved.result.localAudio||(saved.result.localAudio.platform||'douyin')!==task.source.platform||typeof task.client.prepareLocalAudio!=='function')return null;
    if(Number.isFinite(pageSource?.duration)&&Math.abs(pageSource.duration-saved.result.duration)>2)return null;
    try{
     const localAudio=await task.client.prepareLocalAudio(saved.result.localAudio,task.source.videoId);
-    if(localAudio.videoId!==task.source.videoId||localAudio.fingerprint!==saved.result.localAudio.fingerprint||Math.abs(localAudio.duration-saved.result.duration)>2)return null;
+    if((localAudio.platform||'douyin')!==task.source.platform||localAudio.videoId!==task.source.videoId||localAudio.fingerprint!==saved.result.localAudio.fingerprint||Math.abs(localAudio.duration-saved.result.duration)>2)return null;
     task.localMediaSettings=saved.settings;return {...saved.result,localAudio,audio:null,subtitle:null,images:[],frameInfo:{mode:'disabled',frameCount:0,collageCount:0}};
    }catch(error){if(task.cancelled||task.controller?.signal.aborted)throw error;return null;}
   }

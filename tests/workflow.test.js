@@ -130,3 +130,16 @@ test('detached task still honors explicit cancellation and finally preserves rep
  const replacement={id:'newer'};f.workflow.tasks.set(1,replacement);f.complete();await assert.rejects(run,/取消/);
  assert.equal(f.workflow.tasks.get(1),replacement);assert.equal(unlocks,0);
 });
+
+test('all three platforms send full native descriptors to Groq and never fall back to AI Studio',async()=>{
+ for(const [platform,id,url] of [['bilibili','BV1xyWt6JEUn','https://www.bilibili.com/video/BV1xyWt6JEUn'],['youtube','abc123XYZ_0','https://www.youtube.com/watch?v=abc123XYZ_0'],['douyin','7703625319965543714','https://www.douyin.com/video/7703625319965543714']]){
+  const localAudio={fingerprint:'a'.repeat(64),videoId:id,platform,duration:200};
+  const f=fixture({platform,videoId:id,title:'test',duration:200,localAudio,images:[]});f.deps.getTab=async()=>({url});let request;
+  f.client.resolve=async value=>{request=value;return {platform,videoId:id,duration:200,localAudio,images:[]};};
+  f.client.readAsset=async()=>{throw Error('must not read whole audio');};f.deps.sendAIStudio=async()=>{throw Error('must not call Google');};
+  f.deps.transcribe=async(audio,data)=>{assert.equal(audio,null);assert.equal(data.localAudio.platform,platform);return '1\n00:00:00,000 --> 00:03:20,000\ncomplete';};
+  const running=f.workflow.start({openerTabId:1,sourceUrl:url,transcribeService:'groq'});await new Promise(setImmediate);assert.equal(request.localTranscription,true);f.complete();await running;
+  const failed=fixture({platform,videoId:id,duration:200,localAudio,images:[]});failed.deps.getTab=async()=>({url});failed.deps.transcribe=async()=>{throw Error('Groq限流');};let aiCalls=0;failed.deps.sendAIStudio=async()=>{aiCalls++;};
+  await assert.rejects(failed.workflow.start({openerTabId:1,sourceUrl:url,transcribeService:'groq'}),/Groq限流/);assert.equal(aiCalls,0);assert.equal(failed.sent.length,0);
+ }
+});

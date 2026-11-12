@@ -41,7 +41,7 @@
   async groqStatus(){const {result}=await this.request('groq_status');return result;}
   async storeGroqKey(apiKey){const {result}=await this.request('groq_store_key',{apiKey});return result;}
   async transcribeGroq(descriptor,settings={},onProgress){
-   const {result}=await this.request('transcribe_groq',{fingerprint:descriptor?.fingerprint,videoId:descriptor?.videoId,model:settings.model||'whisper-large-v3-turbo',timeoutSeconds:settings.timeoutSeconds??180},onProgress);return result;
+   const {result}=await this.request('transcribe_groq',{fingerprint:descriptor?.fingerprint,videoId:descriptor?.videoId,platform:descriptor?.platform||'douyin',model:settings.model||'whisper-large-v3-turbo',timeoutSeconds:settings.timeoutSeconds??180},onProgress);return result;
   }
   readAsset(assetId){
    return this.request('read_asset',{assetId}).then(({result,chunks})=>{
@@ -53,7 +53,7 @@
    });
   }
   async prepareLocalAudio(descriptor,videoId){
-   const data=typeof descriptor==='string'?{fingerprint:descriptor,videoId}:{fingerprint:descriptor?.fingerprint,videoId:descriptor?.videoId};
+   const data=typeof descriptor==='string'?{fingerprint:descriptor,videoId}:{fingerprint:descriptor?.fingerprint,videoId:descriptor?.videoId,platform:descriptor?.platform||'douyin'};
    const {result}=await this.request('prepare_local_audio',data);return result;
   }
   async finishLocalAudio(descriptor,status){const {result}=await this.request('local_audio_finish',{fingerprint:typeof descriptor==='string'?descriptor:descriptor?.fingerprint,status});return result;}

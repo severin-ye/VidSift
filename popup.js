@@ -2,7 +2,7 @@ let isRunning = false;
 let canClose = false;
 let cachedVideoInfo = null;  // { bvid, aid, cid }
 let cachedHasSubtitle = null; // true/false/null (null = not checked yet)
-let transcribeService = 'aistudio'; // 'aistudio' | 'selfhosted' | 'local'
+let transcribeService = 'groq'; // 'aistudio' | 'selfhosted' | 'local'
 let localModel = null;
 let localDevice = null;
 let douyinLocalSettings = null;
@@ -86,8 +86,11 @@ function updateUI() {
     } else {
       runBtn.textContent = '发送字幕到 ChatGPT';
     }
+  } else if (transcribeService === 'groq') {
+    forceAIStudioLabelText.textContent = '始终用 Groq 转写';
+    runBtn.textContent = noSubtitle || forceChecked ? 'Groq 转写并发送到 ChatGPT' : '发送字幕到 ChatGPT';
   } else {
-    // AI Studio 场景（默认）
+    // 用户显式选择 AI Studio
     forceAIStudioLabelText.textContent = '始终使用 AI Studio';
     if (noSubtitle || forceChecked) {
       runBtn.textContent = '转写音频并交给 ChatGPT 整理';
@@ -300,13 +303,14 @@ runBtn.addEventListener('click', run);
 // Init: load transcribeService config, check if current page is bilibili video, pre-check subtitle
 (async () => {
   try {
-    // 先加载服务来源配置
+    // 先应用统一转写默认，再读取本次选择。
+    await DouyinLocalSettings.migrate(chrome.storage.local);
     const storageResult = await chrome.storage.local.get(['transcribeService', 'localModel', 'localDevice', 'screenshotSettings','audioSettings','douyinTranscribeService','douyinLocalSettings','groqSettings']);
     screenshotSettings = ScreenshotSettings.normalize(storageResult.screenshotSettings);
     audioSettings = AudioSettings.normalize(storageResult.audioSettings);
     screenshotCheckbox.checked=screenshotSettings.enabled;
     screenshotLabel.textContent=screenshotSettings.enabled?'图片提取·开':'图片提取·关';
-    transcribeService = storageResult.transcribeService || 'aistudio';
+    transcribeService = storageResult.transcribeService || 'groq';
     localModel = storageResult.localModel || null;
     localDevice = storageResult.localDevice || null;
     updateUI();
@@ -315,8 +319,8 @@ runBtn.addEventListener('click', run);
     const pageUrl = tab.url || '';
     popupDiagnostic(popupDiagnosticId,'popup.source',{},tab.id,pageUrl);
     currentPlatform=VidSiftPlatforms.identify(pageUrl)?.platform || '';
-    if(currentPlatform==='douyin'){
-      const selected=DouyinLocalSettings.resolve('douyin',storageResult);
+    if(currentPlatform){
+      const selected=DouyinLocalSettings.resolve(currentPlatform,storageResult);
       transcribeService=selected.service;localModel=selected.model;localDevice=selected.device;douyinLocalSettings=selected.settings;groqSettings=selected.groq;updateUI();
     }
     const taskStatus = await getActiveTranscribeTask(tab.id);
