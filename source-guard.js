@@ -11,7 +11,15 @@
   get(tabId,taskId){const task=this.tasks.get(tabId);if(taskId&&task?.id!==taskId)throw new Error('原视频任务已被替代，未发送旧转写结果');return task;}
   async check(task){
    if(!task||task.cancelled||this.tasks.get(task.tabId)!==task)throw new Error('视频任务已取消或被替代，未发送内容');
-   const tab=await this.getTab(task.tabId);if(this.identify(tab.url||'')?.key!==task.source.key)throw new Error('源视频已切换，未发送旧视频内容');
+   if(!task.sourceClosed){
+    let tab;
+    try{tab=await this.getTab(task.tabId);}catch(e){
+     if(!/No tab with id\b|标签页不存在|不存在的标签页/i.test(String(e?.message||e)))throw e;
+     task.sourceClosed=true;
+    }
+    if(task.cancelled||this.tasks.get(task.tabId)!==task)throw new Error('视频任务已取消或被替代，未发送内容');
+    if(!task.sourceClosed&&this.identify(tab.url||'')?.key!==task.source.key)throw new Error('源视频已切换，未发送旧视频内容');
+   }
    if(task.cancelled||this.tasks.get(task.tabId)!==task)throw new Error('视频任务已取消或被替代，未发送内容');
   }
   cancel(tabId){const task=this.tasks.get(tabId);if(task){task.cancelled=true;task.abort?.();}return task;}

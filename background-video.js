@@ -18,6 +18,7 @@ function recordTargetCancellation(task){
  _targetDiagnostics.set(task.id,record);chrome.storage?.local?.set({vidsiftLastTargetDiagnostic:record}).catch(()=>{});
 }
 async function verifySourceChange(task){
+ if(task.sourceClosed)return;
  // SPA notifications can arrive late; only the current top-level tab URL may
  // cancel the task, never an event's old URL or a mere change of focused tab.
  const current=await chrome.tabs.get(task.tabId);
@@ -32,7 +33,7 @@ function waitForTarget(task,tabId){
   // Only active target jobs keep the worker alive; ordinary popup ports do not.
   const pulse=setInterval(()=>{chrome.runtime.getPlatformInfo?.().catch(()=>{});},20000);
   const finish=()=>clearInterval(pulse);
-  const timer=setTimeout(()=>{finish();_targetCompletions.delete(task.id);reject(new Error('附件上传等待超时，已保留页面材料，请检查后重试'));},30*60*1000);
+  const timer=setTimeout(()=>{finish();_targetCompletions.delete(task.id);reject(new Error('当前总结等待超时，已保留目标页面；请检查处理状态，已发送的总结不要重复提交'));},30*60*1000);
   _targetCompletions.set(task.id,{tabId,resolve:payload=>{finish();clearTimeout(timer);_targetCompletions.delete(task.id);resolve(payload);},reject:e=>{finish();clearTimeout(timer);_targetCompletions.delete(task.id);reject(e);}});
  });
 }
@@ -41,8 +42,8 @@ async function sendVideoChatGPT(data){
  if(!target.ok){_targetCompletions.get(task.id)?.reject(new Error(target.error));throw new Error(target.error);}await target.completion;
 }
 async function sendVideoAIStudio(data){
- const {index,windowId}=await getTabInfo(data.openerTabId);
- const tab=await chrome.tabs.create({url:'https://aistudio.google.com/prompts/new_chat',active:false,index:index+1,openerTabId:data.openerTabId,windowId});
+ const {index,windowId,openerTabId}=await getTabInfo(data.openerTabId);
+ const tab=await chrome.tabs.create({url:'https://aistudio.google.com/prompts/new_chat',active:false,index:index+1,...(openerTabId==null?{}:{openerTabId}),...(windowId==null?{}:{windowId})});
  recordTargetPhase(data.task,tab,'created-background');
  const completed=waitForTarget(data.task,tab.id);completed.catch(()=>{});
  _updateActiveTranscribeTask(data.task.tabId,'AI Studio 已在后台创建，正在连接页面上传脚本...');
@@ -119,6 +120,44 @@ const _videoWorkflow=new VideoWorkflow({
   _targetCompletions.get(task.id)?.reject(new Error(task.cancelReason+'，未自动发送'));
  }
 });
+async function startVideoSummary(msg,notify){
+ const source=VidSiftPlatforms.identify(msg.sourceUrl);
+ if(!source)throw new Error('视频来源无效');
+ const tabId=msg.openerTabId;
+ if(_videoWorkflow.tasks.has(tabId)||_legacyGuard.get(tabId)||_getActiveTranscribeTask(tabId))throw new Error('当前视频已有总结任务，请等待或取消');
+ // Metadata acquisition belongs to the worker, never to the popup or source page.
+ const task=_legacyGuard.begin(tabId,msg.sourceUrl);task.diagnosticId=msg.diagnosticId;
+ diagnoseTask(task,'task.started');
+ _setActiveTranscribeTask(tabId,'video','已接收视频，正在后台取得字幕...');
+ try{
+  const stored=await chrome.storage.local.get(['selfHostedApiUrl','selfHostedApiToken']);
+  Object.assign(msg,{selfHostedUrl:stored.selfHostedApiUrl,selfHostedToken:stored.selfHostedApiToken});
+  if(source.platform!=='bilibili'){
+   await _legacyGuard.check(task);msg.sourceClosed=task.sourceClosed===true;
+   finishLegacyTask(task);return await _videoWorkflow.start(msg,notify);
+  }
+  const view=await (await fetch('https://api.bilibili.com/x/web-interface/view?bvid='+encodeURIComponent(source.videoId),{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
+  if(view.code!==0||!view.data?.aid||view.data.bvid!==source.videoId)throw new Error('B站视频信息读取失败：'+(view.message||view.code));
+  if(source.part>1&&!view.data.pages?.[source.part-1]?.cid)throw new Error('未找到所选 B站分P，未发送其他分P的内容');
+  const page=view.data.pages?.[source.part-1],cid=page?.cid||view.data.cid;
+  let subtitle=null;
+  if(!msg.forceAudio){
+   const player=await (await fetch(`https://api.bilibili.com/x/player/wbi/v2?aid=${view.data.aid}&cid=${cid}`,{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
+   const tracks=player.data?.subtitle?.subtitles||[],track=tracks.find(t=>/zh/.test(t.lan))||tracks[0];
+   if(track){const url=track.subtitle_url.startsWith('//')?'https:'+track.subtitle_url:track.subtitle_url;const data=await (await fetch(url,{credentials:'include',signal:AbortSignal.timeout(20000)})).json();if(data.body?.length)subtitle={body:data.body,lan:track.lan};}
+  }
+  await _legacyGuard.check(task);
+  const title=view.data.title||source.videoId;
+  msg.source={...source,title,duration:page?.duration||view.data.duration,coverUrl:view.data.pic||'',subtitle,bili:{aid:view.data.aid,cid,pageUrl:source.url}};
+  if(subtitle&&!ScreenshotSettings.normalize(msg.screenshotSettings).enabled){
+   await handleTask({...msg,taskType:'chatgpt',biliTabId:tabId,videoTitle:title,bvid:source.videoId,file:{name:source.videoId+'.srt',content:VidSiftPlatforms.toSrt(subtitle.body)}},notify,task);
+  }else{
+   msg.sourceClosed=task.sourceClosed===true;
+   finishLegacyTask(task);
+   return await _videoWorkflow.start(msg,notify);
+  }
+ }finally{finishLegacyTask(task);}
+}
 chrome.runtime.onConnect.addListener(port=>{
  if(port.name!=='vidsift-video')return;
  let connected=true;port.onDisconnect.addListener(()=>{connected=false;});
@@ -133,7 +172,7 @@ chrome.runtime.onConnect.addListener(port=>{
     Object.assign(msg,{transcribeService:selected.service,model:selected.model,device:selected.device,localSettings:selected.settings,groqSettings:selected.groq});
     if(stored.douyinTranscribeService===undefined)await chrome.storage.local.set({douyinTranscribeService:'groq'});
    }
-   await _videoWorkflow.start(msg,notify);
+   await startVideoSummary(msg,notify);
   })().catch(e=>notify('ERROR',e.message));
  });
 });
@@ -164,6 +203,12 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
   if(target&&target.tabId===sender.tab?.id){_diagnostics.record(msg.taskId,msg.ok?'target.completed':'target.failed',{accepted:!!msg.ok,category:msg.ok?'success':VidSiftDiagnostics.category(msg.error)},sender.tab.id);if(msg.ok)target.resolve({transcript:msg.transcript});else target.reject(new Error(msg.error||'目标页面上传失败'));}
   sendResponse({ok:!!target});return false;
  }
+ if(msg.type==='VIDSIFT_TARGET_SENT'){
+  const target=_targetCompletions.get(msg.taskId);
+  const ok=target?.tabId===sender.tab?.id&&!!target;
+  if(ok){_diagnostics.record(msg.taskId,'target.submitted',{accepted:true},sender.tab.id);const tabId=_targetSourceTabs.get(sender.tab.id);_updateActiveTranscribeTask(tabId,'总结已发送，正在等待本次 ChatGPT 生成完成；后续视频仍在排队');}
+  sendResponse({ok});return false;
+ }
  if(msg.type==='CANCEL_VIDEO_TASK'){
   const requestedId=sender.tab?.id??msg.tabId;
   const tabId=_targetSourceTabs.get(requestedId)??requestedId;
@@ -182,7 +227,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
 });
 chrome.tabs.onUpdated.addListener((id,change)=>{
  const legacy=_legacyGuard.get(id);
- if(legacy&&change.url&&VidSiftPlatforms.identify(change.url)?.key!==legacy.source.key){
+ if(legacy&&!legacy.sourceClosed&&change.url&&VidSiftPlatforms.identify(change.url)?.key!==legacy.source.key){
   _legacyGuard.cancel(id);if(legacy.targetTabId)chrome.tabs.sendMessage(legacy.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:legacy.id}).catch(()=>{});
   _targetCompletions.get(legacy.id)?.reject(new Error('源视频已切换，未发送旧视频内容'));
  }
@@ -191,7 +236,7 @@ chrome.tabs.onUpdated.addListener((id,change)=>{
 });
 chrome.tabs.onRemoved.addListener(id=>{
  _targetSourceTabs.delete(id);
- _videoWorkflow.cancel(id,'原视频标签页已关闭，任务已停止');const legacy=_legacyGuard.cancel(id);
- if(legacy){if(legacy.targetTabId)chrome.tabs.sendMessage(legacy.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:legacy.id}).catch(()=>{});_targetCompletions.get(legacy.id)?.reject(new Error('源视频页面已关闭，任务已取消'));_updateActiveTranscribeTask(id,'源视频页面已关闭，任务已取消');finishLegacyTask(legacy);}
+ const task=_videoWorkflow.tasks.get(id),legacy=_legacyGuard.get(id);
+ for(const pending of [task,legacy])if(pending){pending.sourceClosed=true;diagnoseTask(pending,'source.closed');}
  for(const target of _targetCompletions.values())if(target.tabId===id)target.reject(new Error('目标页面已关闭，未完成发送'));
 });

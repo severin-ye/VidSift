@@ -44,13 +44,13 @@ test('old content events and result cannot clear or attach to a new transcriptio
  assert.equal((await f.dispatch({type:'SELF_HOSTED_SRT_RESULT',taskId:first,srtContent:'old'},{tab:{id:7}})).ok,false);assert.equal(f.created.length,0);
  await f.dispatch({type:'TRANSCRIBE_TASK_EVENT',state:'error',taskId:second},{tab:{id:7}});assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7})).active,false);
 });
-test('subtitle replaced while target loads cannot send itself with the new task identity',async()=>{
+test('duplicate click cannot replace the current subtitle task while its target loads',async()=>{
  let release,reached;const waiting=new Promise(r=>reached=r),gate=new Promise(r=>release=r);let first=true;
  const f=fixture({pauseReady:()=>{if(first){first=false;reached();return gate;}}});
- const old=f.start();await waiting;
- await f.start({taskType:'selfhosted',biliTabId:7});release();const notes=await old;
- assert.equal(notes.at(-1).type,'ERROR');assert.equal(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').length,0);assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7})).active,true);
- const current=f.sent.find(x=>x.msg.type==='SELF_HOSTED_TRANSCRIBE').msg.taskId;await f.dispatch({type:'TRANSCRIBE_TASK_EVENT',state:'error',taskId:current},{tab:{id:7}});
+ const current=f.start();await waiting;
+ const duplicate=await f.start({biliTabId:7});assert.equal(duplicate.at(-1).type,'ERROR');
+ release();assert.equal((await current).at(-1).type,'DONE');
+ assert.equal(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').length,1);
 });
 
 test('AI Studio task popup resolves progress and cancellation to its source video',async()=>{
@@ -62,12 +62,14 @@ test('AI Studio task popup resolves progress and cancellation to its source vide
  const terminal=await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:20});assert.equal(terminal.active,false);assert.equal(terminal.sourceTabId,7);
 });
 
-test('closing the source cancels a pending legacy target and releases its task state',async()=>{
+test('closing the source preserves its task and target, explicit cancellation still releases it',async()=>{
  const f=fixture();await f.start({taskType:'selfhosted',biliTabId:7});
  vm.runInContext('waitForTarget(_legacyGuard.get(7),20).catch(()=>{});',f.context);
  f.closeTab(7);
- assert.ok(f.sent.some(x=>x.id===20&&x.msg.type==='VIDSIFT_CANCEL_UPLOAD'));
- const status=await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:20});assert.equal(status.active,false);assert.match(status.statusText,/页面已关闭/);
+ assert.equal(f.sent.some(x=>x.id===20&&x.msg.type==='VIDSIFT_CANCEL_UPLOAD'),false);
+ assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:20})).active,true);
+ assert.equal(vm.runInContext('_legacyGuard.get(7).sourceClosed',f.context),true);
+ await f.dispatch({type:'CANCEL_VIDEO_TASK',tabId:20});
  assert.equal(vm.runInContext('_targetCompletions.size',f.context),0);
 });
 
@@ -83,4 +85,22 @@ test('delayed Douyin source-change notification cannot cancel the current matchi
  assert.equal(vm.runInContext('modern.cancelled',f.context),true);
  assert.match(vm.runInContext('modern.cancelReason',f.context),/当前作品已改变/);
  assert.equal(vm.runInContext('_targetDiagnostics.get("modern").currentSourceKey',f.context),'douyin:222');
+});
+
+test('two rapid videos are serialized and a closed queued source still sends once',async()=>{
+ let release,reached,first=true;const gate=new Promise(r=>release=r),waiting=new Promise(r=>reached=r);
+ const f=fixture({pauseReady:()=>{if(first){first=false;reached();return gate;}}});
+ const a=f.start({biliTabId:7});await waiting;const b=f.start({biliTabId:8,openerTabId:8});
+ await new Promise(setImmediate);assert.equal(f.created.length,1);
+ assert.match((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:8})).statusText,/前面还有 1/);
+ f.closeTab(8);release();await Promise.all([a,b]);
+ assert.equal(f.created.length,2);assert.equal(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').length,2);
+});
+
+test('canceling a queued video skips only that item and lets the next video run',async()=>{
+ let release,reached,first=true;const gate=new Promise(r=>release=r),waiting=new Promise(r=>reached=r);
+ const f=fixture({pauseReady:()=>{if(first){first=false;reached();return gate;}}});
+ const a=f.start({biliTabId:7});await waiting;const b=f.start({biliTabId:8});const c=f.start({biliTabId:9});
+ await new Promise(setImmediate);await f.dispatch({type:'CANCEL_VIDEO_TASK',tabId:8});release();
+ const notes=await Promise.all([a,b,c]);assert.equal(notes[1].at(-1).type,'ERROR');assert.equal(notes[2].at(-1).type,'DONE');assert.equal(f.created.length,2);
 });

@@ -358,7 +358,7 @@
     const title=(document.title||'').toLowerCase();
     const text=(document.body?.innerText||'').slice(0,8000);
     if (/just a moment|请稍候/.test(title) || document.querySelector('script[src*="/cdn-cgi/challenge-platform/"]') || /verify you are human|enable javascript and cookies|checking your browser|验证您是真人|验证你是真人/i.test(text)) {
-      return {ready:false,error:'ChatGPT页面正在进行访问验证；请在当前浏览器中手动完成验证，再回到视频页面重试。'};
+      return {ready:false,waitingForVerification:true,error:'ChatGPT页面正在进行访问验证；请在此页面手动完成验证，插件会自动继续当前总结。'};
     }
     return {ready:false};
   }
@@ -718,6 +718,51 @@
     return false;
   }
 
+  // A title or an older reply cannot release the summary queue.
+  function hasFinishedTaskResponse(data,requestMessageId){
+    const mapping=data.mapping||{};
+    return Object.values(mapping).some(node=>{
+      if(node?.message?.author?.role!=='assistant'||node.message.status!=='finished_successfully'||node.message.end_turn!==true)return false;
+      const seen=new Set();let parent=mapping[node.parent];
+      while(parent&&!seen.has(parent)){
+        seen.add(parent);
+        if(parent.message?.author?.role==='user')return parent.message.id===requestMessageId;
+        parent=mapping[parent.parent];
+      }
+      return false;
+    });
+  }
+  async function waitForSummaryGeneration(msg,binding){
+    const deadline=Date.now()+30*60*1000;
+    if(msg.tempChat){
+      let stable=0;
+      while(Date.now()<deadline){
+        assertNotCancelled(msg.taskId);
+        const reply=[...document.querySelectorAll('[data-message-author-role="assistant"]')].some(node=>node.textContent.trim());
+        const busy=document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止流式传输"]');
+        stable=reply&&!busy?stable+1:0;
+        if(stable>=3)return;
+        await new Promise(resolve=>setTimeout(resolve,1000));
+      }
+    }else{
+      const id=await binding?.promise;
+      if(!id)throw new Error('总结已发送，但本次对话编号尚未确认；没有重复发送，请检查当前 ChatGPT 页面');
+      const token=await getAccessToken(),task=_lastConversationTask;
+      while(Date.now()<deadline){
+        assertNotCancelled(msg.taskId);
+        let response;
+        try{response=await fetch('/backend-api/conversation/'+id,{headers:{Authorization:'Bearer '+token},signal:AbortSignal.timeout(8000)});}catch{}
+        if(response?.ok){
+          const data=await response.json();
+          const owned=VidSiftConversationBinding.verify(data,{...task,id,messageId:task.requestMessageId,now:Date.now()});
+          if(owned.ok&&hasFinishedTaskResponse(data,task.requestMessageId))return;
+        }else if(response&&[401,403].includes(response.status))throw new Error('总结已发送，但读取本次生成状态需要重新登录或访问验证；没有重复发送');
+        await new Promise(resolve=>setTimeout(resolve,3000));
+      }
+    }
+    throw new Error('总结已发送，但等待本次生成完成已超时；没有重复发送，请检查当前 ChatGPT 页面');
+  }
+
   // Rename the conversation via ChatGPT internal API.
   // 重命名后会再确认一次，如果被服务端自动标题覆盖则重试。
   async function renameConversationViaAPI(conversationId, title) {
@@ -819,7 +864,7 @@
       sendResponse({ ok: true });
 
       (async () => {
-        let titleTimer = null, libraryBinding = null;
+        let titleTimer = null, libraryBinding = null, generation = null, submitted = false;
         const conversationTitle = VidSiftConversationTitle.formatConversationTitle(msg.videoTitle, {...msg.source, videoId:msg.source?.videoId||msg.bvid});
         const bvidPrefix = msg.bvid ? `[${msg.bvid}] ` : '';
         console.log('[ext] CHATGPT_PREPARE_PROMPT received:',
@@ -858,7 +903,7 @@
           console.log('[ext] CHATGPT_PREPARE_PROMPT: file attached successfully, proceeding to send');
           showStatus('正在发送...');
           assertNotCancelled(msg.taskId);
-          if(!msg.tempChat&&(conversationTitle||msg.libraryEligible)){
+          if(!msg.tempChat&&(conversationTitle||msg.libraryEligible||msg.awaitGeneration)){
             libraryBinding=captureSubmittedConversation(readComposerText(),msg.taskId);
             await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
           }
@@ -868,7 +913,11 @@
               if (!visible.includes(tile) || tile.querySelector('[role="alert"], [data-state="error"], [class*="error"], [role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]')) throw new Error('附件状态已改变，未自动发送');
             }
           });
-          reportTarget(msg, true);
+          submitted=true;
+          if(msg.awaitGeneration)chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_SENT',taskId:msg.taskId}).catch(()=>{});
+          if(msg.awaitGeneration){
+            generation=waitForSummaryGeneration(msg,libraryBinding).then(()=>reportTarget(msg,true),error=>{showError(error.message);reportTarget(msg,false,error.message);});
+          }else reportTarget(msg, true);
           if(msg.libraryEligible&&!msg.tempChat){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId});if(!receipt?.ok)showError('总结已发送，但本次视频的书库待办登记失败；详情已记录到日志');}
           // Submission succeeded — hide the save button now regardless of what happens next
           hideSaveButton();
@@ -907,8 +956,8 @@
           hideStatus();
         } catch (e) {
           clearInterval(titleTimer);
-          showFailedAttachmentRetry(e);
-          reportTarget(msg, false, e.message);
+          if(submitted)showError(e.message);else showFailedAttachmentRetry(e);
+          if(!submitted)reportTarget(msg, false, e.message);
           console.error('[ext] CHATGPT_PREPARE_PROMPT failed, fileAttached=', fileAttached, 'error=', e);
           if (!fileAttached) {
             console.warn('[ext] 文件未成功附加，已跳过自动提交。请检查 DevTools Console 中的 debug 日志。');
@@ -916,7 +965,7 @@
           } else {
             showError(`${bvidPrefix}错误：${e.message}`);
           }
-        } finally { libraryBinding?.stop(); _taskActive = false; }
+        } finally { if(generation)await generation;libraryBinding?.stop(); _taskActive = false; }
       })();
       return;
     }

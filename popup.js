@@ -266,221 +266,32 @@ function subtitleToSrt(body) {
 async function run() {
   if (isRunning) return;
   const diagnosticId='click_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-  function diagnose(stage,details={},sourceTabId,sourceUrl){popupDiagnostic(diagnosticId,stage,details,sourceTabId,sourceUrl);}
-  diagnose('popup.clicked');
-
-  hideError();
-  isRunning = true;
-  canClose = false;
-  let handedOff = false;
-
+  hideError();isRunning=true;canClose=false;
   try {
-    // Get current tab URL
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const pageUrl = tab.url || '';
-    diagnose('popup.source',{},tab.id,pageUrl);
-
-    const taskStatus = await getActiveTranscribeTask(tab.id);
-    if (taskStatus.active) {
-      applyActiveTranscribeTask(taskStatus);
-      showError('当前页面已有音频转写任务进行中，请等待完成后再试。');
-      return;
+    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    const source=VidSiftPlatforms.identify(tab?.url);
+    if(!source)throw new Error('请在 B站、YouTube 或抖音视频页面使用此扩展。');
+    popupDiagnostic(diagnosticId,'popup.clicked',{},tab.id,tab.url);
+    if(transcribeService==='local'&&source.platform!=='douyin'){
+      const granted=await chrome.permissions.request({origins:['https://*.huggingface.co/*','https://cdn.jsdelivr.net/*']});
+      if(!granted)throw new Error('本地模型权限未授予，请在设置页完成配置');
     }
-
-    if (!VidSiftPlatforms.identify(pageUrl)) {
-      showError('请在 B站、YouTube 或抖音视频页面使用此扩展。');
-      return;
-    }
-
-    const identity = VidSiftPlatforms.identify(pageUrl);
-    if (identity.platform !== 'bilibili' || screenshotCheckbox.checked) {
-      if (transcribeService === 'local' && identity.platform !== 'douyin') {
-        const granted = await chrome.permissions.request({origins:['https://*.huggingface.co/*','https://cdn.jsdelivr.net/*']});
-        if (!granted) throw new Error('本地模型权限未授予，请在设置页完成配置');
-      }
-      const config = await chrome.storage.local.get(['selfHostedApiUrl','selfHostedApiToken']);
-      let source = identity;
-      if (identity.platform === 'bilibili') {
-        const info = await fetchVideoInfo(pageUrl);
-        const subtitle = forceAIStudioCheckbox.checked ? null : await fetchSubtitle(info.bvid, info.aid, info.cid);
-        source = {...identity,title:info.title,duration:info.duration,subtitle,bili:{aid:info.aid,cid:info.cid,pageUrl:'https://www.bilibili.com/video/'+info.bvid+'?p='+info.page}};
-      }
-      const port = chrome.runtime.connect({name:'vidsift-video'});
-      port.onMessage.addListener(msg => {
-        if (msg.type === 'STATUS') setStatus(msg.text);
-        if (msg.type === 'ERROR' || msg.type === 'DONE') {
-          if (msg.type === 'ERROR') showError(msg.text); else setStatus(msg.text);
-          isRunning = false; cancelBtn.style.display='none'; activeTranscribeTask=null; runBtn.disabled=false; updateUI();
-        }
-      });
-      port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看处理状态');}});
-      port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:pageUrl,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings,selfHostedUrl:config.selfHostedApiUrl,selfHostedToken:config.selfHostedApiToken});
-      handedOff=true; canClose=true;cancelBtn.style.display='';runBtn.disabled=true;setStatus('已移交后台；重新打开扩展可查看进度');return;
-    }
-
-    // Get video info (use cache from init if available)
-    const { bvid, aid, cid, title: videoTitle, duration } = cachedVideoInfo || await fetchVideoInfo(pageUrl);
-
-    // 判断是否使用自建服务（无字幕 or 强制勾选，且服务来源为 selfhosted）
-    const forceChecked = forceAIStudioCheckbox.checked;
-
-    // Try fetching subtitles (skip if forced)
-    let subtitle = null;
-    if (!forceChecked) {
-      subtitle = cachedHasSubtitle === false ? null : await fetchSubtitle(bvid, aid, cid);
-    }
-
-    const noSubtitle = !subtitle;
-
-    // Connect to background service worker
-    setStatus('正在移交任务，请勿关闭此窗口...');
-    const port = chrome.runtime.connect({ name: 'bilibili-subtitle' });
-
-    port.onMessage.addListener((msg) => {
-      if (msg.type === 'STATUS') { if (!canClose) setStatus(msg.text); return; }
-      if (msg.type === 'ERROR') {
-        showError(msg.text);
-        isRunning = false;
-        void refreshActiveTranscribeTask(tab.id);
-      }
-      if (msg.type === 'DONE') {
-        canClose = true;
-        setStatus(msg.text);
-        isRunning = false;
-        void refreshActiveTranscribeTask(tab.id);
+    const port=chrome.runtime.connect({name:'vidsift-video'});
+    port.onMessage.addListener(msg=>{
+      if(msg.type==='STATUS')setStatus(msg.text);
+      if(msg.type==='ERROR'||msg.type==='DONE'){
+        if(msg.type==='ERROR')showError(msg.text);else setStatus(msg.text);
+        isRunning=false;cancelBtn.style.display='none';activeTranscribeTask=null;runBtn.disabled=false;updateUI();
       }
     });
-
-    port.onDisconnect.addListener(() => {
-      if (isRunning) {
-        showError('后台任务连接已断开，请重试。');
-        isRunning = false;
-        void refreshActiveTranscribeTask(tab.id);
-      }
-    });
-
-    if (!noSubtitle && !forceChecked) {
-      // 有字幕 → 发送字幕到 ChatGPT（两种服务来源均走此流程）
-      const srtContent = subtitleToSrt(subtitle.body);
-      const title = videoTitle || tab.title || 'bilibili-subtitle';
-      const fileName = bvid ? `${bvid}_${title}.srt` : `${title}.srt`;
-
-      port.postMessage({
-        type: 'START_TASK',
-        diagnosticId,
-        sourceUrl: pageUrl,
-        taskType: 'chatgpt',
-        openerTabId: tab.id,
-        biliTabId: tab.id,
-        bgOpen: bgOpenCheckbox.checked,
-        tempChat: tempChatCheckbox.checked,
-        file: { name: fileName, content: srtContent },
-        videoTitle,
-        bvid,
-      });
-      // 字幕数据已完整传入 background，popup 不再需要待机
-      canClose = true;
-      setStatus('字幕已移交后台处理。');
-      isRunning = false;
-      runBtn.disabled = false;
-      handedOff = true;
-    } else if (transcribeService === 'selfhosted') {
-      // 无字幕 + 自建服务 → 音频转写并发送到 ChatGPT
-      setStatus('正在获取音频 URL...');
-      const audioUrls = await fetchSmallestAudioUrl(aid, cid);
-
-      // 读取自建服务配置
-      const storageResult = await chrome.storage.local.get(['selfHostedApiUrl', 'selfHostedApiToken']);
-      const selfHostedUrl = storageResult.selfHostedApiUrl || '';
-      const selfHostedToken = storageResult.selfHostedApiToken || '';
-
-      if (!selfHostedUrl) {
-        showError('请先在设置页配置自建服务 API 地址。');
-        return;
-      }
-
-      port.postMessage({
-        type: 'START_TASK',
-        diagnosticId,
-        sourceUrl: pageUrl,
-        taskType: 'selfhosted',
-        openerTabId: tab.id,
-        bgOpen: bgOpenCheckbox.checked,
-        tempChat: tempChatCheckbox.checked,
-        audioUrls,
-        biliTabId: tab.id,
-        videoTitle,
-        selfHostedUrl,
-        selfHostedToken,
-      });
-      canClose = true;
-      setStatus('后台继续处理，重新打开扩展可查看进度。');
-    } else if (transcribeService === 'local') {
-      // 无字幕 + 本地推理 → 本地转写并发送到 ChatGPT
-      if (!localModel || !localDevice) throw new Error('本地推理配置缺失，请在设置页重新选择模型和设备。');
-      // 确保权限仍然有效（开发模式重新加载扩展后可选权限会重置）
-      const ALL_LOCAL_ORIGINS = [
-        'https://*.huggingface.co/*',
-        'https://cdn.jsdelivr.net/*',
-      ];
-      const permGranted = await chrome.permissions.request({ origins: ALL_LOCAL_ORIGINS }).catch(() => false);
-      if (!permGranted) throw new Error('权限未授予，请在设置页重新选择「本地推理」以授权。');
-      setStatus('正在获取音频 URL...');
-      const audioUrls = await fetchSmallestAudioUrl(aid, cid);
-
-      port.postMessage({
-        type: 'START_TASK',
-        diagnosticId,
-        sourceUrl: pageUrl,
-        taskType: 'local',
-        openerTabId: tab.id,
-        bgOpen: bgOpenCheckbox.checked,
-        tempChat: tempChatCheckbox.checked,
-        audioUrls,
-        biliTabId: tab.id,
-        videoTitle,
-        bvid,
-        model: localModel,
-        device: localDevice,
-      });
-      canClose = true;
-      setStatus('后台继续处理，重新打开扩展可查看进度。');
-    } else {
-      // 无字幕 + AI Studio → 发送音频到 AI Studio
-      setStatus('正在获取音频 URL...');
-      const audioUrls = await fetchSmallestAudioUrl(aid, cid);
-
-      port.postMessage({
-        type: 'START_TASK',
-        diagnosticId,
-        sourceUrl: pageUrl,
-        taskType: 'aistudio',
-        duration,
-        openerTabId: tab.id,
-        bgOpen: bgOpenCheckbox.checked,
-        tempChat: tempChatCheckbox.checked,
-        audioUrls,
-        biliTabId: tab.id,
-        videoTitle,
-        bvid,
-      });
-      // 任务已移交后台，popup 不再需要待机（后台将继续下载音频并在 AI Studio 页面处理）
-      canClose = true;
-      setStatus('后台继续处理，重新打开扩展可查看进度。');
-    }
-
-    handedOff = true;
-    // Status will be updated by background notify messages
-  } catch (e) {
-    diagnose('popup.failed',{errorName:e.name,category:'operation_failed'});
-    showError(`错误：${e.message}`);
-  } finally {
-    if (!handedOff) {
-      isRunning = false;
-      if (!activeTranscribeTask?.active) {
-        runBtn.disabled = false;
-      }
-    }
+    port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看后台任务状态');}});
+    // Transfer the click snapshot before metadata, subtitles or media are fetched.
+    port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:tab.url,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings});
+    canClose=true;cancelBtn.style.display='';runBtn.disabled=true;
+    setStatus('已提交后台，可关闭源视频页；多个视频的总结会依次处理');
+  } catch(e) {
+    popupDiagnostic(diagnosticId,'popup.failed',{errorName:e.name,category:'operation_failed'});
+    isRunning=false;runBtn.disabled=false;showError(e.message);
   }
 }
 

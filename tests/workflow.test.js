@@ -94,3 +94,39 @@ test('workflow preserves raw title and subtitle filename while forwarding truste
  assert.equal(f.sent[0].source.platform,'youtube');assert.equal(f.sent[0].file.name,'abc123XYZ_0_'+raw+'.srt');
  f.complete();await task;
 });
+
+const detachedURL='https://www.youtube.com/watch?v=abc123XYZ_0';
+const detachedCaption=()=>({subtitle:{body:[{from:0,to:1,content:'fixture'}]},images:[],videoId:'abc123XYZ_0',platform:'youtube'});
+test('source already closed before acquisition uses clicked URL and skips page access',async()=>{
+ const f=fixture(detachedCaption());let request,reads=0;
+ f.deps.getTab=async()=>{reads++;throw Error('unexpected lookup');};f.client.resolve=async r=>{request=r;return detachedCaption();};
+ const run=f.workflow.start({openerTabId:1,sourceUrl:detachedURL,sourceClosed:true});await new Promise(setImmediate);
+ assert.equal(f.sent.length,1);assert.equal(reads,0);assert.equal(request.url,detachedURL);assert.equal(f.sent[0].source.url,detachedURL);f.complete();await run;
+});
+
+test('source closes during acquisition, transcription or target upload without cancelling accepted task',async()=>{
+ for(const phase of ['acquisition','transcription','upload']){
+  const f=fixture(phase==='transcription'?{audio:{assetId:'aud'},images:[],videoId:'abc123XYZ_0'}:detachedCaption());
+  const close=()=>{f.workflow.tasks.get(1).sourceClosed=true;f.deps.getTab=async()=>{throw Error('lookup after close');};};
+  if(phase==='acquisition')f.client.resolve=async()=>{close();return detachedCaption();};
+  if(phase==='transcription')f.deps.transcribe=async()=>{close();return 'complete transcript';};
+  const run=f.workflow.start({openerTabId:1,sourceUrl:detachedURL,transcribeService:'selfhosted'});await new Promise(setImmediate);
+  assert.equal(f.sent.length,1,phase);if(phase==='upload')close();f.complete();assert.equal((await run).ok,true);assert.equal(f.sent[0].source.url,detachedURL);
+ }
+});
+
+test('modern missing-tab recognition is narrow and rechecks cancellation and task ownership after await',async()=>{
+ const f=fixture(detachedCaption()),task={tabId:1,source:require('../platforms').identify(detachedURL),cancelled:false};f.workflow.tasks.set(1,task);
+ f.deps.getTab=async()=>{throw Error('No tab with id: 1.');};await f.workflow.assertLive(task);assert.equal(task.sourceClosed,true);
+ task.sourceClosed=false;f.deps.getTab=async()=>{throw Error('Extension context invalidated');};await assert.rejects(f.workflow.assertLive(task),/context invalidated/);assert.equal(task.sourceClosed,false);
+ f.deps.getTab=async()=>{task.cancelled=true;throw Error('No tab with id: 1.');};await assert.rejects(f.workflow.assertLive(task),/取消/);
+ task.cancelled=false;task.sourceClosed=true;f.workflow.tasks.set(1,{id:'replacement'});await assert.rejects(f.workflow.assertLive(task),/替代|取消/);
+});
+
+test('detached task still honors explicit cancellation and finally preserves replacement state',async()=>{
+ const f=fixture(detachedCaption());let unlocks=0;f.deps.unlock=()=>unlocks++;
+ const run=f.workflow.start({openerTabId:1,sourceUrl:detachedURL});await new Promise(setImmediate);
+ const old=f.workflow.tasks.get(1);old.sourceClosed=true;assert.equal(f.workflow.cancel(1),true);
+ const replacement={id:'newer'};f.workflow.tasks.set(1,replacement);f.complete();await assert.rejects(run,/取消/);
+ assert.equal(f.workflow.tasks.get(1),replacement);assert.equal(unlocks,0);
+});

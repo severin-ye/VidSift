@@ -15,7 +15,7 @@ const _pageBridge = new PageBridge(chrome);
 async function getTabInfo(tabId) {
   try {
     const t = await chrome.tabs.get(tabId);
-    return { index: t.index, windowId: t.windowId };
+    return { index: t.index, windowId: t.windowId, openerTabId: tabId };
   } catch (e) {
     return { index: 0, windowId: undefined };
   }
@@ -43,16 +43,21 @@ function waitForTabLoad(tabId, timeout = 120_000) {
 // Poll until ChatGPT content script reports ready (textarea present).
 // Background tabs hydrate slowly (visibility-gated), so wait generously.
 // Returns 'ready' | 'timeout'
-async function ensureChatGPTReady(tabId, timeout = 600_000) {
+async function ensureChatGPTReady(tabId, timeout = 600_000, assertLive) {
   const intervalMs = 1000;
   const deadline = performance.now() + timeout;
   while (performance.now() < deadline) {
+    if(assertLive)await assertLive();
     let response;
     try {
       response = await chrome.tabs.sendMessage(tabId, { type: 'VIDSIFT_CHATGPT_CHECK_READY' });
-    } catch (e) {}
+    } catch (e) { await chrome.tabs.get(tabId); }
     if (response?.ready) return 'ready';
-    if (response?.error) throw new Error(response.error);
+    if (response?.error) {
+      // Human verification is a waiting state, not a reason to lose or resend a job.
+      if (!response.waitingForVerification) throw new Error(response.error);
+      overlayMsg(tabId,{type:'EXT_STATUS',text:'当前总结正在等待 ChatGPT 访问验证；请在此页面完成验证，插件会自动继续，后续视频仍在排队。'});
+    }
     await new Promise(r => setTimeout(r, intervalMs));
   }
   return 'timeout';
@@ -187,7 +192,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const sourceTabId=_targetSourceTabs.get(msg.tabId)??msg.tabId;
     const task = _getActiveTranscribeTask(sourceTabId);
     const legacy = _legacyGuard.get(sourceTabId);
-    sendResponse({sourceTabId,active:!!task||!!(legacy&&!legacy.cancelled),...(_lastTranscribeTaskMap.get(sourceTabId)||{}),...(task||{}),...(!task&&legacy&&!legacy.cancelled?{taskType:'legacy',statusText:'正在处理当前视频内容'}:{})});
+    sendResponse({sourceTabId,active:!!task||!!(legacy&&!legacy.cancelled),...(_lastTranscribeTaskMap.get(sourceTabId)||{}),...(task||{}),...(!task&&legacy&&!legacy.cancelled?{taskType:'legacy',statusText:legacy.statusText||'正在处理当前视频内容'}:{})});
     return false;
   }
   if (msg.type === 'TRANSCRIBE_TASK_EVENT') {
@@ -423,21 +428,54 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // 打开 ChatGPT 标签页并发送文件（核心逻辑，供多处复用）
 // 返回 { ok: boolean, error?: string }
-async function _openChatGPTAndSend({ file, attachments, taskId, legacyTask, beforeDispatch, beforePrepare, source, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid }) {
+const _summaryQueue=[];
+let _summaryQueueRunning=false;
+function updateSummaryQueue(){
+  _summaryQueue.forEach((job,index)=>{
+    const text=index===0&&_summaryQueueRunning?'正在处理当前总结，后续视频按顺序等待':`总结已加入队列，前面还有 ${index} 个视频`;
+    if(job.task)job.task.statusText=text;
+    _updateActiveTranscribeTask(job.sourceTabId,text);
+  });
+}
+async function _openChatGPTAndSend(data){
+  const task=data.legacyTask||data.task;
+  return new Promise((resolve,reject)=>{
+    _summaryQueue.push({task,sourceTabId:data.biliTabId,resolve,reject,data});
+    updateSummaryQueue();void drainSummaryQueue();
+  });
+}
+async function drainSummaryQueue(){
+  if(_summaryQueueRunning)return;
+  _summaryQueueRunning=true;
+  const pulse=setInterval(()=>{chrome.runtime.getPlatformInfo?.().catch(()=>{});},20000);
+  try{
+    while(_summaryQueue.length){
+      updateSummaryQueue();const job=_summaryQueue[0];
+      try{
+        if(job.task?.cancelled)throw new Error('视频任务已取消，已跳过排队项');
+        const result=await _dispatchChatGPTAndSend(job.data);
+        if(result.ok&&result.completion)await result.completion;
+        job.resolve(result);
+      }catch(error){job.reject(error);}
+      finally{_summaryQueue.shift();}
+    }
+  }finally{clearInterval(pulse);_summaryQueueRunning=false;}
+}
+async function _dispatchChatGPTAndSend({ file, attachments, taskId, legacyTask, beforeDispatch, beforePrepare, source, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid }) {
   let targetTabId = null;
   try {
     if(legacyTask) await _legacyGuard.check(legacyTask);
     let url = 'https://chatgpt.com/';
     if (tempChat) url += '?temporary-chat=true';
 
-    const { index: openerIndex, windowId } = await getTabInfo(openerTabId);
-    const tab = await chrome.tabs.create({ url, active: !bgOpen, index: openerIndex + 1, openerTabId: biliTabId, windowId });
+    const { index: openerIndex, windowId, openerTabId: liveOpener } = await getTabInfo(biliTabId??openerTabId);
+    const tab = await chrome.tabs.create({ url, active: !bgOpen, index: openerIndex + 1, ...(liveOpener==null?{}:{openerTabId:liveOpener}), ...(windowId==null?{}:{windowId}) });
     targetTabId = tab.id;
     await waitForTabLoad(targetTabId);
 
     overlayMsg(targetTabId, { type: 'EXT_STATUS', text: '正在连接 ChatGPT...' });
     await _pageBridge.ensure(targetTabId,'chatgpt');
-    const readyResult = await ensureChatGPTReady(targetTabId);
+    const readyResult = await ensureChatGPTReady(targetTabId,600_000,legacyTask?()=>_legacyGuard.check(legacyTask):beforePrepare);
     if (readyResult !== 'ready') {
       const errMsg = '无法连接到 ChatGPT 页面，请刷新 chatgpt.com 后重试。';
       overlayMsg(targetTabId, { type: 'EXT_ERROR', text: errMsg });
@@ -451,15 +489,16 @@ async function _openChatGPTAndSend({ file, attachments, taskId, legacyTask, befo
     if(beforePrepare)await beforePrepare();
     const completion = beforeDispatch ? beforeDispatch(targetTabId) : legacyTask ? waitForTarget(legacyTask,targetTabId) : null;
     if (completion) completion.catch(() => {});
-    await chrome.tabs.sendMessage(targetTabId, {
+    const accepted=await chrome.tabs.sendMessage(targetTabId, {
       type: 'VIDSIFT_CHATGPT_PREPARE_PROMPT',
-      attachments, taskId, source, libraryEligible,
+      attachments, taskId, source:source||legacyTask?.source, libraryEligible, awaitGeneration:true,
       file,
       bgOpen,
       tempChat,
       videoTitle,
       bvid,
     });
+    if(!accepted?.ok){const error=new Error(accepted?.error||'ChatGPT 未确认接收总结任务，未重复发送');_targetCompletions.get(taskId)?.reject(error);throw error;}
     return { ok: true, targetTabId, completion };
   } catch (e) {
     if(taskId)_videoLibrary.abandon(taskId).catch(()=>{});
@@ -810,8 +849,8 @@ chrome.runtime.onConnect.addListener((port) => {
     }
     if (!Number.isInteger(msg.openerTabId) || msg.openerTabId < 0) msg.openerTabId = msg.biliTabId;
 
-    const existingTask = _getActiveTranscribeTask(msg.biliTabId);
-    if (existingTask && _isAudioTranscribeTask(msg.taskType)) {
+    const existingTask = _getActiveTranscribeTask(msg.biliTabId)||_legacyGuard.get(msg.biliTabId);
+    if (existingTask&&!existingTask.cancelled) {
       notify('ERROR', existingTask.statusText || '当前页面已有音频转写任务进行中，请等待完成后再试。');
       return;
     }
