@@ -14,11 +14,18 @@ test('streaming, empty, analysis-only and errored responses never count as compl
 });
 test('an older finished response cannot verify a newer requested summary',()=>{
  const data=fixture();data.mapping.later={parent:'reply',message:{id:'user-2',author:{role:'user'}}};
- assert.equal(inspectSummary(data,{conversationId:id,requestMessageId:'user-2'}).status,'pending');
+ assert.equal(inspectSummary(data,{conversationId:id,requestMessageId:'user-2'}).status,'unknown');
 });
 test('identity mismatch, broken/cyclic ancestry and absent evidence are unknown',()=>{
  const wrong=fixture();wrong.conversation_id='22222222-2222-4333-8444-555555555555';assert.equal(inspectSummary(wrong,{conversationId:id}).status,'unknown');
  const broken=fixture();broken.mapping.reply.parent='missing';assert.notEqual(inspectSummary(broken,{conversationId:id}).status,'completed');
  const cycle=fixture();cycle.mapping.reply.parent='reply';assert.notEqual(inspectSummary(cycle,{conversationId:id}).status,'completed');
  assert.equal(inspectSummary({conversation_id:id},{conversationId:id}).status,'unknown');
+});
+test('hidden user context is not mistaken for the initial video summary request',()=>{
+ const data=fixture();data.mapping.context={parent:'root',message:{id:'hidden-context',author:{role:'user'},content:{content_type:'user_editable_context'},metadata:{is_user_system_message:true}}};data.mapping.request.parent='context';
+ const result=inspectSummary(data,{conversationId:id});assert.equal(result.status,'completed');assert.equal(result.requestMessageId,'user-1');
+});
+test('missing usable final-reply evidence is unknown, not an assertion that generation is active',()=>{
+ const data=fixture();delete data.mapping.reply;assert.equal(inspectSummary(data,{conversationId:id}).status,'unknown');
 });

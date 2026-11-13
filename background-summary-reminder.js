@@ -44,16 +44,22 @@ function summarySenderSource(sender){
  if(sender.id!==chrome.runtime.id||!sender.tab||!sender.url)throw Error('已有总结查询仅允许当前视频页面');
  return VidSiftVideoLibrary.normalizeSource({url:sender.url});
 }
+function summaryDiagnosticId(tabId,video){const part=video.platform==='bilibili'?new URL(video.url).searchParams.get('p')||1:1;return 'reminder_'+tabId+'_'+video.videoId+'_'+part;}
 async function summaryPage(message,sender){
  const source=summarySenderSource(sender),actual=VidSiftVideoLibrary.normalizeSource({url:(await chrome.tabs.get(sender.tab.id)).url});
  if(source.url!==actual.url||VidSiftVideoLibrary.normalizeSource({url:message.videoUrl}).url!==actual.url)throw Error('视频已切换，已丢弃旧总结查询');
  const config=await _videoLibrary.getSettings(),key=sender.tab.id+'|'+source.url+'|'+(message.cursor||'');
  if(_summaryQueries.has(key))return _summaryQueries.get(key);
+ const diagnosticId=summaryDiagnosticId(sender.tab.id,source);await _diagnostics.begin(diagnosticId,{sourceTabId:sender.tab.id,platform:source.platform,videoId:source.videoId});await _diagnostics.record(diagnosticId,'library.reminder_queried',{state:'querying'});
+ if(VidSiftVideoLibrary.normalizeSource({url:(await chrome.tabs.get(sender.tab.id)).url}).url!==source.url)throw Error('视频已切换，已取消旧总结查询');
  cancelSummaryJob(sender.tab.id);const job={valid:true,source:source.url};_summaryTabJobs.set(sender.tab.id,job);
  const run=VidSiftSummaryLookup.completedPage({source,config,cursor:message.cursor,external:(id,msg)=>{if(!job.valid)throw Error('视频已切换，已取消旧总结查询');return summaryDeadline(chrome.runtime.sendMessage(id,msg),6000);},verify:ids=>verifySummaryIds(ids,()=>job.valid)});
- _summaryQueries.set(key,run);try{const result=await run;if(!job.valid)throw Error('视频已切换，已丢弃旧总结结果');return result;}finally{if(_summaryQueries.get(key)===run)_summaryQueries.delete(key);if(_summaryTabJobs.get(sender.tab.id)===job)_summaryTabJobs.delete(sender.tab.id);}
+ _summaryQueries.set(key,run);try{const result=await run;if(!job.valid)throw Error('视频已切换，已丢弃旧总结结果');await _diagnostics.record(diagnosticId,'library.reminder_result',{state:result.disabled?'disabled':result.records.length?'completed':result.unknown?'unknown':result.pending?'pending':'no_candidates',count:result.records.length,checkedCount:result.checked||0,pendingCount:result.pending||0,unknownCount:result.unknown||0,candidateCount:result.totalCandidates||0});return result;}catch(error){await _diagnostics.record(diagnosticId,'library.reminder_failed',{state:'failed',reason:error.code||'lookup_failed'});throw error;}finally{if(_summaryQueries.get(key)===run)_summaryQueries.delete(key);if(_summaryTabJobs.get(sender.tab.id)===job)_summaryTabJobs.delete(sender.tab.id);}
 }
 chrome.runtime.onMessage.addListener((message,sender,reply)=>{
+ if(message.type==='VIDSIFT_SUMMARIES_VIEW_STATE'){
+  (async()=>{const source=summarySenderSource(sender),id=summaryDiagnosticId(sender.tab.id,source);await _diagnostics.begin(id,{sourceTabId:sender.tab.id,platform:source.platform,videoId:source.videoId});await _diagnostics.record(id,'library.reminder_view',{ready:message.ready===true,active:message.active===true,state:['watching','expanded','folded','blocked'].includes(message.state)?message.state:'unknown',count:Number.isSafeInteger(message.count)&&message.count>=0?message.count:0});})().catch(()=>{});reply({ok:true});return false;
+ }
  if(message.type==='VIDSIFT_SUMMARIES_QUERY'){
   if(message.cursor!=null&&(typeof message.cursor!=='string'||message.cursor.length>2048)){reply({ok:false,error:'总结分页身份无效'});return false;}
   summaryPage(message,sender).then(reply,error=>reply({ok:false,error:error.message,code:error.code}));return true;
@@ -65,5 +71,5 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   chrome.tabs.query({}).then(tabs=>Promise.all(tabs.filter(t=>VidSiftPlatforms.identify(t.url)).map(t=>chrome.tabs.sendMessage(t.id,{type:'VIDSIFT_SUMMARIES_REFRESH'}).catch(()=>{})))).catch(()=>{});
  }
 });
-chrome.tabs.onUpdated.addListener((id,change)=>{if(change.url){const job=_summaryTabJobs.get(id);try{if(job&&VidSiftVideoLibrary.normalizeSource({url:change.url}).url!==job.source)cancelSummaryJob(id);}catch{cancelSummaryJob(id);}}if(change.url||change.status==='complete')chrome.tabs.sendMessage(id,{type:'VIDSIFT_SUMMARIES_REFRESH'}).catch(()=>{});});
+chrome.tabs.onUpdated.addListener((id,change,tab)=>{if(change.url){const job=_summaryTabJobs.get(id);try{if(job&&VidSiftVideoLibrary.normalizeSource({url:change.url}).url!==job.source)cancelSummaryJob(id);}catch{cancelSummaryJob(id);}}if(change.url||change.status==='complete'){const video=VidSiftPlatforms.identify(change.url||tab?.url);if(!video)return;const diagnosticId=summaryDiagnosticId(id,video);_diagnostics.begin(diagnosticId,{sourceTabId:id,platform:video.platform,videoId:video.videoId}).then(()=>_diagnostics.record(diagnosticId,'library.reminder_source',{state:'observed'})).catch(()=>{});chrome.tabs.sendMessage(id,{type:'VIDSIFT_SUMMARIES_REFRESH'}).catch(()=>{});}});
 chrome.tabs.onRemoved.addListener(cancelSummaryJob);

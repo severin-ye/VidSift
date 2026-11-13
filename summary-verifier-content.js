@@ -14,7 +14,7 @@
   if(reader){let size=0;const decoder=new TextDecoder();try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>max)throw Error('总结对话超过本次只读核验上限');text+=decoder.decode(value,{stream:true});}text+=decoder.decode();}finally{await reader.cancel().catch(()=>{});}}
   else {text=await response.text();if(text.length>max)throw Error('总结对话超过本次只读核验上限');}
   let data;try{data=JSON.parse(text);}catch{throw Error('ChatGPT对话响应无法解析');}
-  return VidSiftSummaryVerification.inspectSummary(data,{conversationId:id});
+  return {conversationId:id,...VidSiftSummaryVerification.inspectSummary(data,{conversationId:id})};
  }
  chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   if(message.type==='VIDSIFT_SUMMARY_READER_PING'){reply({ok:true,protocol:1});return false;}

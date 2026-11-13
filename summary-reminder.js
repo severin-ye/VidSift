@@ -11,7 +11,7 @@
  if(typeof document==='undefined'||root.__vidsiftSummaryReminder)return;
  root.__vidsiftSummaryReminder=true;
  let host,shadow,button,panel,list,note,more,source,key='',epoch=0,loading=false,expanded=false,immersive=false,frame=0;
- let records=[],cursor=null,unknown=0,pending=0,error='',disabled=false,checked=0,total=0;
+ let records=[],cursor=null,unknown=0,pending=0,error='',disabled=false,checked=0,total=0,lastRenderDiagnostic='';
  const modeObserver=new MutationObserver(()=>scheduleMode());
  const icon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-3-2H4zM13 7a3 3 0 0 1 3-3h5v15h-5a4 4 0 0 0-3 2"/></svg>';
  function mount(){
@@ -37,6 +37,8 @@
   list.replaceChildren();records.forEach((record,i)=>{const row=document.createElement('button');row.className='record';row.title=record.title;row.innerHTML='<span class="file">'+icon+'</span><span class="info"><span class="title"></span><span class="time"></span></span><span class="open">打开 ↗</span>';row.querySelector('.title').textContent='总结 '+(i+1)+(i===0?' · 最近保存':'');const date=new Date(record.createdAt);row.querySelector('.time').textContent=Number.isFinite(date.getTime())?date.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):'保存时间未知';row.addEventListener('click',async()=>{try{const result=await chrome.runtime.sendMessage({type:'VIDSIFT_SUMMARY_OPEN',videoUrl:source.url,url:record.chatgptUrl});if(!result?.ok)throw Error(result?.error||'打开总结失败');}catch(e){error=e.message;render();}});list.append(row);});
   const messages=[];if(error)messages.push(error);if(unknown)messages.push('有 '+unknown+' 条记录暂时无法核实，未计入总结数量。');if(cursor)messages.push('已核验 '+checked+'/'+total+' 条保存记录；可继续核验其余记录。');if(loading)messages.push('正在核验对应对话，请稍候。');
   note.textContent=messages.join(' ');note.hidden=!messages.length;more.hidden=!cursor;more.disabled=loading;shadow.querySelector('.refresh').disabled=loading;
+  const signature=[key,visible,immersive,expanded,records.length,!!error].join('|');
+  if(signature!==lastRenderDiagnostic){lastRenderDiagnostic=signature;const rect=host.getBoundingClientRect(),shown=visible&&rect.width>0&&rect.height>0&&getComputedStyle(host).visibility!=='hidden';chrome.runtime.sendMessage({type:'VIDSIFT_SUMMARIES_VIEW_STATE',ready:shown,active:!immersive,state:visible&&!shown?'blocked':immersive?'watching':expanded?'expanded':'folded',count:records.length}).catch(()=>{});}
  }
  function observeMode(){
   modeObserver.disconnect();const watched=new Set([document.documentElement,document.body,document.querySelector('ytd-watch-flexy')]);for(const video of document.querySelectorAll('video')){const rect=video.getBoundingClientRect();if(rect.bottom<0||rect.top>window.innerHeight)continue;let node=video;for(let i=0;node&&i<14;i++,node=node.parentElement)watched.add(node);}

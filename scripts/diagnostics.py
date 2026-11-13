@@ -14,7 +14,7 @@ import struct
 import sys
 
 EXTENSION_ID = 'kggdkncbamdlhhihfkeldbbkppkgihad'
-KEYS = {'vidsiftErrorLog', 'vidsiftTaskDiagnostics', 'videoLibraryState', 'vidsiftLastTargetDiagnostic'}
+KEYS = {'vidsiftErrorLog', 'vidsiftTaskDiagnostics', 'videoLibraryState', 'vidsiftLastTargetDiagnostic', 'videoLibrarySettings'}
 FALLBACK_KEY = re.compile(rb'vidsiftErrorFallback\.[A-Za-z0-9_-]{1,128}')
 MAX_FILE = 128 * 1024 * 1024
 MAX_SNAPSHOT = 512 * 1024 * 1024
@@ -313,6 +313,7 @@ def redact(value):
 
 META = {'id', 'at', 'version', 'component', 'taskId', 'tabId', 'category', 'message', 'reason', 'reasonText', 'text', 'error', 'errorMessage', 'status', 'state', 'stage', 'phase', 'code', 'startedAt', 'updatedAt', 'finishedAt', 'endedAt', 'createdAt', 'timestamp', 'platform', 'title', 'url', 'videoId', 'source', 'ok', 'success', 'count', 'attempt', 'durationMs', 'progress', 'event', 'type', 'name', 'diagnosticCode', 'cancelled', 'cancelReason'}
 META.update({'elapsedMs', 'duration', 'bytes', 'originalBytes', 'outputBytes', 'audioCandidateCount', 'selectedSourceBytes', 'selectedSourceBitrate', 'attachmentIndex', 'cardCount', 'addedCardCount', 'audioReadyState', 'subtitleCount', 'imageCount', 'sourceTabId', 'targetTabId', 'targetTabIds', 'clickId', 'trackedCardPresent', 'busy', 'hasAudio', 'hasHTMLAudio', 'hasImage', 'hasTokenCount', 'playEnabled', 'runEnabled', 'promptFilled', 'accepted', 'active', 'ready', 'hasSubtitle', 'generating', 'hasResponse', 'hasTranscript', 'mime', 'errorName', 'subtitleStatus', 'audioSourceKind', 'attachedState', 'reasonCategory', 'nativeVersion'})
+META.update({'checkedCount', 'pendingCount', 'unknownCount', 'candidateCount'})
 
 
 def metadata(value, depth=0):
@@ -401,6 +402,12 @@ def read_store(path, limit=50, since=None):
                 except (ValueError, UnicodeError):
                     report['complete'] = False
                     report['warnings'].append(f'{key}: invalid JSON value')
+        config = decoded.get('videoLibrarySettings')
+        report['libraryConfig'] = None if not isinstance(config, dict) else {
+            'enabled': config.get('enabled') if isinstance(config.get('enabled'), bool) else None,
+            'reminderEnabled': config.get('reminderEnabled') if isinstance(config.get('reminderEnabled'), bool) else None,
+            'extensionId': config.get('extensionId') if isinstance(config.get('extensionId'), str) and re.fullmatch('[a-p]{32}', config['extensionId']) else None,
+        }
         errors = rows(decoded.get('vidsiftErrorLog', {}), 'errors')
         for key, value in decoded.items():
             if key.startswith('vidsiftErrorFallback.'):

@@ -29,6 +29,7 @@
  }
  const numeric=new Set(['elapsedMs','duration','bytes','originalBytes','outputBytes','audioCandidateCount','selectedSourceBytes','selectedSourceBitrate','attachmentIndex','cardCount','addedCardCount','audioReadyState','subtitleCount','imageCount','sourceTabId','targetTabId','count']);
  const flags=new Set(['trackedCardPresent','busy','hasAudio','hasHTMLAudio','hasImage','hasTokenCount','playEnabled','runEnabled','promptFilled','accepted','cancelled','active','ready','hasSubtitle','generating','hasResponse','hasTranscript','ok']);
+ for(const key of ['checkedCount','pendingCount','unknownCount','candidateCount'])numeric.add(key);
  const words=new Set(['platform','mime','category','errorName','state','subtitleStatus','audioSourceKind','attachedState','component','phase','reasonCategory','nativeVersion','reason']);
  function category(error){const s=String(error?.message||error||'');return /取消|已关闭|已改变|已切换/.test(s)?'cancelled':/超时|timeout/i.test(s)?'timeout':/连接|connect/i.test(s)?'connection':/权限|permission/i.test(s)?'permission':/字幕|转写/.test(s)?'transcription':/附件|上传/.test(s)?'upload':'operation_failed';}
  function cancelReason(value){const s=String(value||'');return /标签页.*关闭|页面.*关闭/.test(s)?'source_closed':/作品.*改变|视频.*切换/.test(s)?'source_changed':/离开/.test(s)?'source_left':/扩展.*取消/.test(s)?'user_cancel':/应答|传输/.test(s)?'transfer_failed':'cancelled';}
