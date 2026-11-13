@@ -42,8 +42,7 @@ document.querySelector('button').onclick=async()=>{const text=document.querySele
   };
   globalThis.libraryRegistrations=[];const register=_videoLibrary.register.bind(_videoLibrary);_videoLibrary.register=async task=>{libraryRegistrations.push(task);return register(task);};_videoLibrary.drain=async()=>{};
  });
- // This fixture isolates provider/GPT queue behavior; playback has its own real-media fixture.
- await control.evaluate(()=>chrome.storage.local.set({biliCompanionEnabled:false,videoLibrarySettings:{enabled:true},customPrompt:'Summarize this synthetic test subtitle.'}));
+ await control.evaluate(()=>chrome.storage.local.set({videoLibrarySettings:{enabled:true},customPrompt:'Summarize this synthetic test subtitle.'}));
  const a=await context.newPage(),b=await context.newPage(),c=await context.newPage();await a.goto('https://www.bilibili.com/video/BVtestA');await b.goto('https://www.bilibili.com/video/BVtestB');await c.goto('https://www.bilibili.com/video/BVtestC');
  await control.evaluate(async()=>{
   window.notes=[];window.ports=[];const tabs=(await chrome.tabs.query({})).filter(t=>t.url?.includes('/video/BVtest'));

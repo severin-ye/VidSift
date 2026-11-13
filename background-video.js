@@ -179,12 +179,6 @@ async function startVideoSummary(msg,notify){
    return await _videoWorkflow.start(msg,notify);
   }
  });notify('ACCEPTED','后台已接收并加入队列，可关闭源视频页');
- // Interest is expressed by submitting this video; playback never gates or resends the summary.
- if(source.platform==='bilibili'&&globalThis.VidSiftCompanion){
-  globalThis.VidSiftCompanion.enqueue(source,{taskId:task.id,tempChat:msg.tempChat===true}).then(result=>{
-   if(result?.ok===false&&result.reason!=='总结伴播已关闭')globalThis.VidSiftErrors?.report('总结伴播未加入：'+(result.reason||'后台播放未接收，视频总结继续'),{component:'companion'});
-  }).catch(error=>globalThis.VidSiftErrors?.report('总结伴播未加入：'+error.message,{component:'companion'}));
- }
  return await running;
  }catch(error){diagnoseTask(task,'task.failed',{category:VidSiftDiagnostics.category(error),errorName:error.name});throw error;}finally{finishLegacyTask(task);}
 }

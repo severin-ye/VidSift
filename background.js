@@ -4,7 +4,6 @@ importScripts('task-diagnostics.js','audio-settings.js','douyin-local-settings.j
 const _diagnostics=VidSiftDiagnostics.create(chrome.storage?.local,{version:chrome.runtime.getManifest?.().version||'unknown'});
 importScripts('background-errors.js');
 importScripts('summary-lookup.js','background-summary-reminder.js');
-importScripts('bili-companion.js','background-bili-companion.js');
 function diagnoseTask(task,stage,details={}){try{if(stage==='task.started')_diagnostics.begin(task.id,{sourceTabId:task.tabId,platform:task.source.platform,videoId:task.source.videoId},task.diagnosticId);return _diagnostics.record(task.id,stage,details);}catch{return Promise.resolve(false);}}
 
 const _legacyGuard = new SourceGuard(id=>chrome.tabs.get(id), VidSiftPlatforms.identify);
