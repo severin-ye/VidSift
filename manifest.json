@@ -9,6 +9,7 @@
   "permissions": [
     "activeTab",
     "tabs",
+    "alarms",
     "storage",
     "offscreen",
     "nativeMessaging",
@@ -56,6 +57,16 @@
   "content_scripts": [
     {
       "matches": [
+        "https://www.bilibili.com/zh-Hans/video/*",
+        "https://www.bilibili.com/zh-Hant/video/*"
+      ],
+      "js": [
+        "bili-companion-content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
@@ -86,6 +97,7 @@
         "error-reporter.js",
         "platforms.js",
         "summary-reminder.js",
+        "bili-companion-content.js",
         "bilibili-content.js"
       ],
       "run_at": "document_idle"
