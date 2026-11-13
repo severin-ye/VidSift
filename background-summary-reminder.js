@@ -5,6 +5,26 @@ function takeSummarySlot(valid){if(!valid())return Promise.resolve(false);if(_su
 function releaseSummarySlot(){while(_summaryWaiters.length){const next=_summaryWaiters.shift();if(next.valid()){next.resolve(true);return;}next.resolve(false);}_summarySlots--;}
 function cancelSummaryJob(tabId){const job=_summaryTabJobs.get(tabId);if(job)job.valid=false;_summaryTabJobs.delete(tabId);for(let i=_summaryWaiters.length-1;i>=0;i--)if(!_summaryWaiters[i].valid()){_summaryWaiters[i].resolve(false);_summaryWaiters.splice(i,1);}}
 function summaryDeadline(promise,ms=12000){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('已有总结核验超时，请稍后重试')),ms);})]).finally(()=>clearTimeout(timer));}
+function connectSummaryReader(tab){
+ return new Promise((resolve,reject)=>{
+  let settled=false,busy=false,again=false;
+  const timer=setTimeout(()=>finish(Object.assign(Error('ChatGPT核验入口尚未就绪，请确认页面可访问后刷新核验'),{code:'READER_NOT_READY'})),18000);
+  function finish(error){if(settled)return;settled=true;clearTimeout(timer);chrome.tabs.onUpdated.removeListener(updated);error?reject(error):resolve();}
+  async function attempt(){
+   if(settled)return;if(busy){again=true;return;}busy=true;let current;
+   try{
+    current=await chrome.tabs.get(tab.id);if(!/^https:\/\/chatgpt\.com\//.test(current?.url||''))return;
+    await chrome.scripting.executeScript({target:{tabId:tab.id},files:['summary-verification.js','summary-verifier-content.js'],injectImmediately:true});
+    if(settled)return;
+    const ping=await summaryDeadline(chrome.tabs.sendMessage(tab.id,{type:'VIDSIFT_SUMMARY_READER_PING'}));
+    if(!ping?.ok)throw Error('ChatGPT只读核验入口未就绪');finish();
+   }catch(error){if(current?.status==='complete')finish(Object.assign(error,{code:error.code||'READER_CONNECT_FAILED'}));}
+   finally{busy=false;if(again){again=false;void attempt();}}
+  }
+  function updated(id,change){if(id===tab.id&&(change.url||change.status))void attempt();}
+  chrome.tabs.onUpdated.addListener(updated);void attempt();
+ });
+}
 async function closeOwnedSummaryReader(reader){
  try{if(reader.owned&&reader.tabId!=null){const current=await chrome.tabs.get(reader.tabId).catch(()=>null);if(current?.active||current&&!/^https:\/\/chatgpt\.com\/?$/.test(current.url||''))reader.everUsed=true;if(current&&!reader.everUsed)await chrome.tabs.remove(reader.tabId).catch(()=>{});}}
  finally{reader.dispose?.();}
@@ -18,9 +38,7 @@ async function createSummaryReader(){
   if(reader.owned){chrome.tabs.onActivated.addListener(activated);chrome.tabs.onUpdated.addListener(navigated);reader.dispose=()=>{chrome.tabs.onActivated.removeListener(activated);chrome.tabs.onUpdated.removeListener(navigated);};}
   try{
    if(!tab){tab=await chrome.tabs.create({url:'https://chatgpt.com/',active:false});reader.tabId=tab.id;reader.everUsed=tab.active||activatedBeforeCreate.has(tab.id);}
-   if(tab.status!=='complete')await new Promise((resolve,reject)=>{const timer=setTimeout(()=>finish(Error('ChatGPT核验页尚未就绪')),18000);const listener=(id,change)=>{if(id===tab.id&&change.status==='complete')finish();};function finish(error){clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);error?reject(error):resolve();}chrome.tabs.onUpdated.addListener(listener);chrome.tabs.get(tab.id).then(t=>{if(t.status==='complete')finish();},finish);});
-   await chrome.scripting.executeScript({target:{tabId:tab.id},files:['summary-verification.js','summary-verifier-content.js']});
-   const ping=await summaryDeadline(chrome.tabs.sendMessage(tab.id,{type:'VIDSIFT_SUMMARY_READER_PING'}));if(!ping?.ok)throw Error('ChatGPT只读核验入口未就绪');
+   await connectSummaryReader(tab);
    return reader;
   }catch(error){await closeOwnedSummaryReader(reader);throw error;}
 }

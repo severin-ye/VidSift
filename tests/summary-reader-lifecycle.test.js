@@ -11,5 +11,14 @@ test('a helper once activated remains user-owned after switching back to the vid
 test('a new borrower waits for closing helper and cannot borrow the old tab',async()=>{
  const f=fixture(),first=await f.ctx.acquireSummaryReader();let releaseGet;f.chrome.tabs.get=()=>new Promise(resolve=>releaseGet=()=>resolve(f.tabs.get(first.tabId)));
  const closing=f.ctx.releaseSummaryReader(first);let second;const acquiring=f.ctx.acquireSummaryReader().then(value=>second=value);await new Promise(r=>setTimeout(r,0));assert.equal(second,undefined);
- releaseGet();await closing;await acquiring;assert.notEqual(second.tabId,first.tabId);assert.deepEqual(f.removed,[first.tabId]);f.chrome.tabs.get=async id=>f.tabs.get(id);await f.ctx.releaseSummaryReader(second);
+ f.chrome.tabs.get=async id=>f.tabs.get(id);releaseGet();await closing;await acquiring;assert.notEqual(second.tabId,first.tabId);assert.deepEqual(f.removed,[first.tabId]);await f.ctx.releaseSummaryReader(second);
+});
+
+test('reader works while unrelated page resources are still loading',async()=>{
+ const f=fixture();f.chrome.tabs.create=async()=>{const tab={id:55,url:'https://chatgpt.com/',active:false,status:'loading'};f.tabs.set(55,tab);return tab;};
+ let options;f.chrome.scripting.executeScript=async value=>{options=value;return [];};
+ const result=await Promise.race([f.ctx.acquireSummaryReader(),new Promise(resolve=>setTimeout(()=>resolve(null),100))]);
+ if(!result){f.tabs.get(55).status='complete';f.onUpdated.fire(55,{status:'complete'});}
+ assert.ok(result,'API reader must not wait for whole-page load');assert.equal(options.injectImmediately,true);
+ await f.ctx.releaseSummaryReader(result);
 });
