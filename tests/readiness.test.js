@@ -8,7 +8,7 @@ test('content readiness distinguishes access verification from a ready composer'
  assert.match(c.check().error,/手动完成验证/);composer={};assert.equal(c.check().ready,true);composer=null;document.title='ChatGPT';document.body.innerText='Loading';assert.equal(c.check().ready,false);assert.equal(c.check().error,undefined);
 });
 test('missing background reply surfaces a connection error instead of silently enabling tasks',async()=>{
- const c=vm.createContext({chrome:{runtime:{sendMessage:async()=>undefined}}});const source=fs.readFileSync('popup.js','utf8').split('async function getActiveTranscribeTask')[1].split('function applyActiveTranscribeTask')[0];vm.runInContext('async function getActiveTranscribeTask'+source+';globalThis.check=getActiveTranscribeTask;',c);await assert.rejects(c.check(1),/后台未响应/);
+ const c=vm.createContext({currentPlatform:'bilibili',chrome:{runtime:{sendMessage:async()=>undefined}}});const source=fs.readFileSync('popup.js','utf8').split('async function getActiveTranscribeTask')[1].split('function applyActiveTranscribeTask')[0];vm.runInContext('async function getActiveTranscribeTask'+source+';globalThis.check=getActiveTranscribeTask;',c);await assert.rejects(c.check(1),/后台未响应/);
 });
 
 test('access verification holds the accepted job and resumes without another submission',async()=>{

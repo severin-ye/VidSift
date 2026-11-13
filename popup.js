@@ -11,6 +11,7 @@ let activeTranscribeTask = null;
 let statusTabId = null;
 let viewingTaskTarget = false;
 let currentPlatform = 'bilibili';
+let sourceTabSnapshot = null;
 let screenshotSettings = ScreenshotSettings.normalize();
 let audioSettings = AudioSettings.normalize();
 const screenshotCheckbox = document.getElementById('screenshotCheckbox');
@@ -133,7 +134,7 @@ function setStatus(msg) {
 async function getActiveTranscribeTask(tabId) {
   statusTabId = tabId;
   try {
-    const result = await chrome.runtime.sendMessage({ type: 'GET_TAB_TRANSCRIBE_STATUS', tabId });
+    const result = await chrome.runtime.sendMessage({ type: 'GET_TAB_TRANSCRIBE_STATUS', tabId, includeQueue: !currentPlatform });
     if (!result) throw new Error('扩展后台未响应，请在扩展管理页重新加载知行视频总结');
     return result;
   } catch (e) {
@@ -271,7 +272,9 @@ async function run() {
   const diagnosticId='click_'+Date.now()+'_'+Math.random().toString(36).slice(2);
   hideError();isRunning=true;canClose=false;
   try {
-    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+    // The source was identified before enabling the button. Submit the click
+    // synchronously rather than depending on another popup-owned API callback.
+    const tab=sourceTabSnapshot;
     const source=VidSiftPlatforms.identify(tab?.url);
     if(!source)throw new Error('请在 B站、YouTube 或抖音视频页面使用此扩展。');
     popupDiagnostic(diagnosticId,'popup.clicked',{},tab.id,tab.url);
@@ -281,6 +284,7 @@ async function run() {
     }
     const port=chrome.runtime.connect({name:'vidsift-video'});
     port.onMessage.addListener(msg=>{
+      if(msg.type==='ACCEPTED'){canClose=true;cancelBtn.style.display='';runBtn.disabled=true;setStatus(msg.text);}
       if(msg.type==='STATUS')setStatus(msg.text);
       if(msg.type==='ERROR'||msg.type==='DONE'){
         if(msg.type==='ERROR')showError(msg.text);else setStatus(msg.text);
@@ -290,8 +294,8 @@ async function run() {
     port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看后台任务状态');}});
     // Transfer the click snapshot before metadata, subtitles or media are fetched.
     port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:tab.url,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings});
-    canClose=true;cancelBtn.style.display='';runBtn.disabled=true;
-    setStatus('已提交后台，可关闭源视频页；多个视频的总结会依次处理');
+    runBtn.disabled=true;
+    setStatus('正在交给后台接收...');
   } catch(e) {
     popupDiagnostic(diagnosticId,'popup.failed',{errorName:e.name,category:'operation_failed'});
     isRunning=false;runBtn.disabled=false;showError(e.message);
@@ -316,6 +320,7 @@ runBtn.addEventListener('click', run);
     updateUI();
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    sourceTabSnapshot=tab;
     const pageUrl = tab.url || '';
     popupDiagnostic(popupDiagnosticId,'popup.source',{},tab.id,pageUrl);
     currentPlatform=VidSiftPlatforms.identify(pageUrl)?.platform || '';

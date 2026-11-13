@@ -20,6 +20,24 @@ function fixture({failHandoff=false,failTarget=false,pauseReady}={}){
 test('real legacy START_TASK with only openerTabId opens target and sends subtitle until acknowledged',async()=>{
  const f=fixture(),notes=await f.start();assert.equal(notes.some(x=>x.type==='ERROR'),false,JSON.stringify(notes));assert.equal(f.created.length,1);assert.equal(f.created[0].openerTabId,7);assert.equal(f.sent.find(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').msg.file.content,'hello');assert.equal(notes.at(-1).type,'DONE');
 });
+
+test('source closes between lookup and target creation: recover without stale placement and send once',async()=>{
+ const f=fixture(),create=f.context.chrome.tabs.create;let calls=0;
+ f.context.chrome.tabs.create=async options=>{calls++;if(calls===1){assert.equal(options.openerTabId,7);throw Error('No tab with id: 7.');}assert.equal(options.openerTabId,undefined);assert.equal(options.windowId,2);return create(options);};
+ f.context.chrome.windows={getAll:async()=>[{id:2,focused:true}]};
+ const notes=await f.start();assert.equal(notes.at(-1).type,'DONE');assert.equal(calls,2);assert.equal(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').length,1);
+});
+
+test('last source window closes: target is created in one fresh window',async()=>{
+ const f=fixture(),create=f.context.chrome.tabs.create;let windows=0;
+ f.context.chrome.tabs.create=async()=>{throw Error('No window with id: 1.');};
+ f.context.chrome.windows={getAll:async()=>[],create:async options=>{windows++;assert.equal(options.url,'https://chatgpt.com/');return {id:3,tabs:[await create(options)]};}};
+ assert.equal((await f.start()).at(-1).type,'DONE');assert.equal(windows,1);
+});
+
+test('permission or ambiguous target creation failures are never retried',async()=>{
+ for(const message of ['Permission denied','Connection closed']){const f=fixture();let calls=0;f.context.chrome.tabs.create=async()=>{calls++;throw Error(message);};const notes=await f.start();assert.equal(notes.at(-1).type,'ERROR');assert.equal(calls,1);assert.equal(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').length,0);}
+});
 test('Groq configuration check accepts the actual options tab but rejects website messages',async()=>{
  const f=fixture();f.context.chrome.runtime.id='extension';f.context.chrome.runtime.getURL=p=>'chrome-extension://extension/'+p;let calls=0;
  f.context.NativeMediaClient=class {async groqStatus(){calls++;return {configured:true};}close(){}};
@@ -93,6 +111,8 @@ test('two rapid videos are serialized and a closed queued source still sends onc
  const a=f.start({biliTabId:7});await waiting;const b=f.start({biliTabId:8,openerTabId:8});
  await new Promise(setImmediate);assert.equal(f.created.length,1);
  assert.match((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:8})).statusText,/前面还有 1/);
+ const queue=await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:99,includeQueue:true});assert.equal(queue.sourceTabId,7);assert.equal(queue.queueCount,2);
+ assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:99})).active,false,'a different video must remain available for admission');
  f.closeTab(8);release();await Promise.all([a,b]);
  assert.equal(f.created.length,2);assert.equal(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').length,2);
 });

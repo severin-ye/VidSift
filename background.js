@@ -21,6 +21,26 @@ async function getTabInfo(tabId) {
   }
 }
 
+async function createTaskTarget(url,active,sourceTabId){
+  const info=await getTabInfo(sourceTabId);
+  try{
+    return await chrome.tabs.create({url,active,...(info.openerTabId==null?{}:{openerTabId:info.openerTabId,index:info.index+1}),...(info.windowId==null?{}:{windowId:info.windowId})});
+  }catch(error){
+    // A rejected create has not sent a summary. Retry only an explicit stale
+    // tab/window error, never an ambiguous connection or permission failure.
+    if(!/No tab with id\b|No window with id\b|No current window\b|window.*(?:not found|closed)|标签页不存在|窗口不存在/i.test(String(error?.message||error)))throw error;
+    const windows=await chrome.windows?.getAll?.({windowTypes:['normal']});
+    if(windows?.length)return chrome.tabs.create({url,active,windowId:windows.find(w=>w.focused)?.id??windows[0].id});
+    if(chrome.windows?.create){
+      const window=await chrome.windows.create({url,focused:active});
+      const tab=window.tabs?.[0]||(await chrome.tabs.query({windowId:window.id}))[0];
+      if(!tab)throw new Error('已创建目标窗口，但未取得目标标签页；没有重复发送总结');
+      return tab;
+    }
+    return chrome.tabs.create({url,active});
+  }
+}
+
 // Wait for a tab to fully load (status=complete) + extra SPA hydration delay
 function waitForTabLoad(tabId, timeout = 120_000) {
   return new Promise((resolve, reject) => {
@@ -189,10 +209,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
   if (msg.type === 'GET_TAB_TRANSCRIBE_STATUS') {
-    const sourceTabId=_targetSourceTabs.get(msg.tabId)??msg.tabId;
+    let sourceTabId=_targetSourceTabs.get(msg.tabId)??msg.tabId;
+    if(msg.includeQueue&&!_getActiveTranscribeTask(sourceTabId)&&!_legacyGuard.get(sourceTabId)&&_summaryQueue.length)sourceTabId=_summaryQueue[0].sourceTabId;
     const task = _getActiveTranscribeTask(sourceTabId);
     const legacy = _legacyGuard.get(sourceTabId);
-    sendResponse({sourceTabId,active:!!task||!!(legacy&&!legacy.cancelled),...(_lastTranscribeTaskMap.get(sourceTabId)||{}),...(task||{}),...(!task&&legacy&&!legacy.cancelled?{taskType:'legacy',statusText:legacy.statusText||'正在处理当前视频内容'}:{})});
+    const result={sourceTabId,active:!!task||!!(legacy&&!legacy.cancelled),...(_lastTranscribeTaskMap.get(sourceTabId)||{}),...(task||{}),...(!task&&legacy&&!legacy.cancelled?{taskType:'legacy',statusText:legacy.statusText||'正在处理当前视频内容'}:{})};
+    const position=_summaryQueue.findIndex(job=>job.sourceTabId===sourceTabId);
+    if(position>=0){result.queuePosition=position+1;result.queueCount=_summaryQueue.length;result.statusText=(result.statusText||'正在处理视频')+`（队列 ${position+1}/${_summaryQueue.length}）`;}
+    sendResponse(result);
     return false;
   }
   if (msg.type === 'TRANSCRIBE_TASK_EVENT') {
@@ -473,8 +497,7 @@ async function _dispatchChatGPTAndSend({ file, attachments, taskId, legacyTask, 
     let url = 'https://chatgpt.com/';
     if (tempChat) url += '?temporary-chat=true';
 
-    const { index: openerIndex, windowId, openerTabId: liveOpener } = await getTabInfo(biliTabId??openerTabId);
-    const tab = await chrome.tabs.create({ url, active: !bgOpen, index: openerIndex + 1, ...(liveOpener==null?{}:{openerTabId:liveOpener}), ...(windowId==null?{}:{windowId}) });
+    const tab = await createTaskTarget(url,!bgOpen,biliTabId??openerTabId);
     targetTabId = tab.id;
     await waitForTabLoad(targetTabId);
 
@@ -520,7 +543,7 @@ async function handleTask(msg, notify, legacyTask) {
   try {
     if (taskType === 'chatgpt') {
       notify('STATUS', '正在打开 ChatGPT...');
-      const result = await _openChatGPTAndSend({ file, legacyTask, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid });
+      const result = await _openChatGPTAndSend({ file, source:msg.source||legacyTask?.source, legacyTask, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid });
       if(result.completion) await result.completion;
       if (!result.ok) {
         notify('ERROR', result.error);

@@ -27,8 +27,9 @@
    try{
     await this.assertLive(task);log('source.checked');task.client=d.client();log('native.connected');
     if(typeof task.client.request==='function'){try{const reply=await task.client.request('diagnostics');log('native.version',{nativeVersion:reply.result?.version||'unknown'});}catch{log('native.diagnostics_failed');}}
-    let pageSource;
-    if(source.platform==='douyin'&&d.snapshot&&!task.sourceClosed){
+    let pageSource=msg.pageSource;
+    if(pageSource&&String(pageSource.videoId)!==source.videoId)throw new Error('已采集作品与点击的视频不一致，未发送内容');
+    if(source.platform==='douyin'&&!pageSource&&d.snapshot&&!task.sourceClosed){
      status('STATUS','正在读取当前抖音作品的原视频信息...');
      try{pageSource=await d.snapshot(task);}catch{pageSource=null;}
      await this.assertLive(task);

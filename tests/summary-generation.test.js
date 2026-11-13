@@ -1,7 +1,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 const source=fs.readFileSync('chatgpt-content.js','utf8');
 const context=vm.createContext({});
-vm.runInContext(source.slice(source.indexOf('  function hasFinishedTaskResponse('),source.indexOf('  async function waitForSummaryGeneration(')),context);
+vm.runInContext(source.slice(source.indexOf('  function taskResponseOutcome('),source.indexOf('  async function waitForSummaryGeneration(')),context);
 const user=id=>({message:{id,author:{role:'user'}}});
 const assistant=(parent,status='finished_successfully',end_turn=true)=>({parent,message:{author:{role:'assistant'},status,end_turn}});
 test('queue completion belongs to this user message, never an old reply or title',()=>{
