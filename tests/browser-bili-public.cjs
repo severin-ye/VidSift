@@ -17,14 +17,21 @@ let context,worker;
  while(Date.now()<deadline){state=await worker.evaluate(()=>VidSiftCompanion.status());if(state.current?.state==='playing'||!state.current)break;await new Promise(resolve=>setTimeout(resolve,1000));}
  const page=context.pages().find(page=>page.url().includes(bvid));
  if(page){
+  // Official locale navigation may replace the first document after it briefly
+  // starts playing; observe the committed page's media instead of a stale report.
+  await page.locator('video').waitFor({state:'attached',timeout:45000});
+  await page.waitForFunction(()=>document.querySelector('video')?.readyState>=2,{},{timeout:45000});
   report.domMedia=await page.locator('video,bwp-video').evaluateAll(elements=>elements.map(e=>({tag:e.tagName,ready:e.readyState,duration:Number.isFinite(e.duration)?e.duration:null,time:e.currentTime,paused:e.paused,muted:e.muted,playType:typeof e.play}))).catch(()=>[]);
   report.pageTitle=await page.title();await page.screenshot({path:path.join(art,'actual-player.png')}).catch(()=>{});
  }
  report.state=state;
  assert.equal(state?.current?.state,'playing','real official page must start muted actual playback');
- await new Promise(resolve=>setTimeout(resolve,12000));
+ const initialTime=await page.locator('video').evaluate(video=>video.currentTime);
+ await page.waitForFunction(initial=>document.querySelector('video')?.currentTime>initial+5,initialTime,{timeout:45000});
  const after=await worker.evaluate(()=>VidSiftCompanion.status());report.after=after;
- assert(after.current?.position>state.current.position+5,'official playback must advance without seeking');
+ report.actualTime=await page.locator('video').evaluate(video=>video.currentTime);
+ assert(report.actualTime>initialTime+5,'official playback must advance without seeking');
+ assert(after.current,'official page must remain owned while playing');
  const tab=await control.evaluate(tabId=>chrome.tabs.get(tabId),after.current.tabId);assert.equal(tab.mutedInfo.muted,true);assert.equal(tab.active,false);
  report.passed=true;
 }catch(error){report.error=error.stack;process.exitCode=1;}
