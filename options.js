@@ -732,23 +732,25 @@ init();
 
 // ---- 书库联动：独立设置块，不覆盖提示词、图片或音频设置 ----
 const libraryEnabled=document.getElementById('library-enabled'),libraryId=document.getElementById('library-id'),libraryStatus=document.getElementById('library-status');
-function librarySwitchLabel(){document.getElementById('library-enabled-label').textContent=libraryEnabled.checked?'书库联动·开':'书库联动·关';}
+const libraryReminder=document.getElementById('library-reminder');
+function librarySwitchLabel(){document.getElementById('library-enabled-label').textContent=libraryEnabled.checked?'书库联动·开':'书库联动·关';document.getElementById('library-reminder-label').textContent=libraryReminder.checked?'已有总结提醒·开':'已有总结提醒·关';}
 async function refreshLibraryStatus(retry=false){
  libraryStatus.textContent=retry?'正在重试保存视频信息；不会重新生成总结':'正在读取书库保存状态';
  try{const result=await chrome.runtime.sendMessage({type:retry?'VIDSIFT_LIBRARY_RETRY':'VIDSIFT_LIBRARY_STATUS'});if(!result?.ok)throw Error(result?.error||'扩展后台未响应');libraryStatus.textContent=result.message+'；待保存或补封面 '+result.pending+' 条，等待对话链接 '+result.waiting+' 条';}
  catch(e){libraryStatus.textContent='无法确认视频书库保存状态：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
 }
 libraryEnabled.addEventListener('change',librarySwitchLabel);
+libraryReminder.addEventListener('change',librarySwitchLabel);
 document.getElementById('library-save').addEventListener('click',async()=>{
  if(!/^[a-p]{32}$/.test(libraryId.value.trim())){libraryStatus.textContent='知行批注扩展 ID 应是32个a到p的小写字母';globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'validation'});return;}
- try{await chrome.storage.local.set({videoLibrarySettings:{enabled:libraryEnabled.checked,extensionId:libraryId.value.trim()}});libraryStatus.textContent='书库联动设置已保存；本块之外的设置保持原值';}catch(e){libraryStatus.textContent='书库联动设置未保存：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
+ try{await chrome.storage.local.set({videoLibrarySettings:{enabled:libraryEnabled.checked,reminderEnabled:libraryReminder.checked,extensionId:libraryId.value.trim()}});libraryStatus.textContent='书库联动设置已保存；本块之外的设置保持原值';}catch(e){libraryStatus.textContent='书库联动设置未保存：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
 });
 document.getElementById('library-reset').addEventListener('click',async()=>{
- try{await chrome.storage.local.set({videoLibrarySettings:{...VidSiftVideoLibrary.DEFAULTS}});libraryEnabled.checked=true;libraryId.value=VidSiftVideoLibrary.DEFAULTS.extensionId;librarySwitchLabel();libraryStatus.textContent='书库联动已恢复默认；已有卡片、待办和其他设置保留';}catch(e){libraryStatus.textContent='书库联动默认设置未保存：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
+ try{await chrome.storage.local.set({videoLibrarySettings:{...VidSiftVideoLibrary.DEFAULTS}});libraryEnabled.checked=true;libraryReminder.checked=true;libraryId.value=VidSiftVideoLibrary.DEFAULTS.extensionId;librarySwitchLabel();libraryStatus.textContent='书库联动已恢复默认；已有卡片、待办和其他设置保留';}catch(e){libraryStatus.textContent='书库联动默认设置未保存：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});}
 });
 document.getElementById('library-retry').addEventListener('click',()=>refreshLibraryStatus(true));
 document.getElementById('library-refresh').addEventListener('click',()=>refreshLibraryStatus(false));
-chrome.storage.local.get('videoLibrarySettings').then(value=>{const config=VidSiftVideoLibrary.settings(value.videoLibrarySettings);libraryEnabled.checked=config.enabled;libraryId.value=config.extensionId;librarySwitchLabel();return refreshLibraryStatus();}).catch(e=>{libraryStatus.textContent='书库联动配置读取失败：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});});
+chrome.storage.local.get('videoLibrarySettings').then(value=>{const config=VidSiftVideoLibrary.settings(value.videoLibrarySettings);libraryEnabled.checked=config.enabled;libraryReminder.checked=config.reminderEnabled;libraryId.value=config.extensionId;librarySwitchLabel();return refreshLibraryStatus();}).catch(e=>{libraryStatus.textContent='书库联动配置读取失败：'+e.message;globalThis.VidSiftErrors?.report(libraryStatus.textContent,{component:'options',category:'library'});});
 
 // Persist visible error statuses even when the popup that started a test is gone.
 if(typeof MutationObserver==='function'){

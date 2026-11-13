@@ -23,6 +23,7 @@ try {
  $items=@('manifest.json','background.js','background-video.js','video-library.js','background-library.js','popup.js','popup.html','popup.css','options.html','options.js','screenshot-settings.js','attachment-utils.js','attachment-transfer.js','audio-settings.js','task-diagnostics.js','error-reporter.js','background-errors.js','conversation-binding.js','native-client.js','platforms.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','platform-content.js','bilibili-content.js','bilibili-content-main.js','conversation-title.js','chatgpt-content.js','chatgpt-library-main.js','aistudio-content.js','aistudio-transcript.js','offscreen.js','offscreen.html','prompt_chatgpt.txt','prompt_aistudio.txt','PRIVACY_POLICY.md','README.md','INSTALL.md','CHANGELOG.md','LICENSE','THIRD_PARTY.md','设计对齐稿','icons','lib','test','installer','requirements-native.txt','package.json')
  $items+=@('douyin-local-settings.js','local-transcription.js','local-media-cache.js','offscreen-local.js','whisper-worker.js','options-local.js')
  $items+=@('groq-credential-prompt.js','groq-key.html','groq-key.js','groq-key.css')
+ $items+=@('summary-verification.js','summary-verifier-content.js','summary-lookup.js','background-summary-reminder.js','summary-reminder.js')
  foreach($item in $items){
   if(!(Test-Path -LiteralPath $item)){throw "Package input missing: $item"}
   Copy-Item -LiteralPath $item -Destination $stage -Recurse -Force

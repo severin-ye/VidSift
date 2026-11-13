@@ -1,9 +1,9 @@
 (function(root){
  'use strict';
  const SETTINGS_KEY='videoLibrarySettings',STATE_KEY='videoLibraryState';
- const DEFAULTS={enabled:true,extensionId:'ajjcbhalcgpmelnmlnheefbfikdgmjdp'};
+ const DEFAULTS={enabled:true,reminderEnabled:true,extensionId:'ajjcbhalcgpmelnmlnheefbfikdgmjdp'};
  const UUID='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
- function settings(value={}){return {enabled:value?.enabled!==false,extensionId:/^[a-p]{32}$/.test(value?.extensionId||'')?value.extensionId:DEFAULTS.extensionId};}
+ function settings(value={}){return {enabled:value?.enabled!==false,reminderEnabled:value?.reminderEnabled!==false,extensionId:/^[a-p]{32}$/.test(value?.extensionId||'')?value.extensionId:DEFAULTS.extensionId};}
  function conversationUrl(value){
   try{const u=new URL(value);if(u.protocol!=='https:'||u.hostname!=='chatgpt.com'||u.username||u.password||u.port||u.searchParams.get('temporary-chat')==='true')return null;
    if(!new RegExp('^/(?:g/[^/]+/)?c/'+UUID+'/?$','i').test(u.pathname))return null;return u.origin+u.pathname.replace(/\/$/,'');

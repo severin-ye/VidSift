@@ -460,6 +460,7 @@ html, body {
     <div class="section-title" id="library-title">知行批注书库联动</div>
     <p class="radio-desc" style="margin-left:0">普通聊天自动保存视频链接、封面和 ChatGPT 链接；临时聊天不保存，不保存总结正文。没有批注也会收录；划线或文字均属于有批注。关闭联动保留已存卡片及待办。</p>
     <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="library-enabled"><span id="library-enabled-label">书库联动·开</span></label></div>
+    <div class="form-group"><label class="checkbox-label"><input type="checkbox" id="library-reminder"><span id="library-reminder-label">已有总结提醒·开</span></label><p class="radio-desc" style="margin-left:0">只显示已核实完成且非空的总结；默认折叠，视频全屏或放大观看时自动隐藏。仅核验当前视频的已保存对话，需要已登录 ChatGPT；没有可用页面时会短暂打开一个后台核验页，结束后关闭未被使用的核验页。</p></div>
     <div class="form-group"><label class="form-label" for="library-id">知行批注扩展 ID</label><input class="form-input" id="library-id" minlength="32" maxlength="32" spellcheck="false"><p class="radio-desc" style="margin-left:0">默认使用这台电脑现有书库；重新安装导致 ID 改变时，可从扩展管理页复制新的 ID。</p></div>
     <div class="btn-row"><button class="save-btn" id="library-save">保存书库联动设置</button><button class="reset-btn" id="library-reset">恢复书库联动默认设置</button></div>
     <div class="btn-row"><button class="test-btn" id="library-retry">重试待保存记录</button><button class="test-btn" id="library-refresh">刷新保存状态</button></div>
