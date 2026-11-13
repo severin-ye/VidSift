@@ -6,7 +6,10 @@ function event(){const listeners=[];return {listeners,addListener(fn){listeners.
 function fixture({failHandoff=false,failTarget=false,pauseReady}={}){
  const sent=[],created=[],getIds=[],messages=event(),connections=event(),updated=event(),removed=event();
  const dispatch=(msg,sender={})=>new Promise(resolve=>{let pending=false;for(const fn of messages.listeners){if(fn(msg,sender,resolve)===true)pending=true;}if(!pending)resolve();});
- const chrome={runtime:{onMessage:messages,onConnect:connections},tabs:{onUpdated:updated,onRemoved:removed,
+ // This fixture exercises summary dispatch; the independent playback queue is
+ // disabled while its actual Chrome event/storage surfaces remain available.
+ const storageArea=data=>({get:async keys=>keys==null?{...data}:Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(key=>[key,data[key]])),set:async value=>Object.assign(data,value),remove:async keys=>{for(const key of Array.isArray(keys)?keys:[keys])delete data[key];}});
+ const chrome={runtime:{onMessage:messages,onConnect:connections},storage:{onChanged:event(),local:storageArea({biliCompanionEnabled:false}),session:storageArea({})},alarms:{onAlarm:event(),create:async()=>{},clear:async()=>{}},tabs:{onUpdated:updated,onRemoved:removed,onActivated:event(),
   async get(id){getIds.push(id);assert.ok(Number.isInteger(id),'tabs.get(integer tabId): No matching signature');return {id,url:id===20?'https://chatgpt.com/':sourceUrl,index:0,windowId:1};},
   async create(options){created.push(options);setImmediate(()=>updated.listeners.slice().forEach(fn=>fn(20,{status:'complete'})));return {id:20};},
   async sendMessage(id,msg){assert.ok(Number.isInteger(id));sent.push({id,msg});if(msg.type==='VIDSIFT_CHATGPT_PING')return {ok:true,component:'chatgpt',captureProtocol:2};if(msg.type==='VIDSIFT_BILI_PING')return {ok:true,component:'bilibili',mainReady:true};if(msg.type==='VIDSIFT_CHATGPT_CHECK_READY'){if(pauseReady)await pauseReady();return {ready:true};}if(msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT')await dispatch({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok:!failTarget,error:'upload failed'},{tab:{id}});if(msg.type==='SELF_HOSTED_TRANSCRIBE'&&failHandoff)throw new Error('content script unavailable');return {ok:true};}
