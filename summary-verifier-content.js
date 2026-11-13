@@ -3,7 +3,7 @@
  if(globalThis.__vidsiftSummaryVerifier)return;globalThis.__vidsiftSummaryVerifier=true;
  let tokenPromise=null;
  async function token(){
-  if(!tokenPromise)tokenPromise=(async()=>{const response=await fetch('/api/auth/session',{signal:AbortSignal.timeout(8000)});if(!response.ok)throw Error('ChatGPT登录状态暂时无法读取');const value=await response.json();if(!value.accessToken)throw Error('请先登录ChatGPT以核验已完成总结');return value.accessToken;})().catch(error=>{tokenPromise=null;throw error;});
+  if(!tokenPromise)tokenPromise=(async()=>{const response=await fetch('/api/auth/session',{signal:AbortSignal.timeout(8000)});if(!response.ok)throw Error('ChatGPT登录状态暂时无法读取');let value;try{value=await response.json();}catch{throw Error('ChatGPT登录状态响应无效');}if(!value.accessToken)throw Error('请先登录ChatGPT以核验已完成总结');return value.accessToken;})().catch(error=>{tokenPromise=null;throw error;});
   return tokenPromise;
  }
  async function read(id){
@@ -13,7 +13,8 @@
   const reader=response.body?.getReader();let text='';
   if(reader){let size=0;const decoder=new TextDecoder();try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>max)throw Error('总结对话超过本次只读核验上限');text+=decoder.decode(value,{stream:true});}text+=decoder.decode();}finally{await reader.cancel().catch(()=>{});}}
   else {text=await response.text();if(text.length>max)throw Error('总结对话超过本次只读核验上限');}
-  return VidSiftSummaryVerification.inspectSummary(JSON.parse(text),{conversationId:id});
+  let data;try{data=JSON.parse(text);}catch{throw Error('ChatGPT对话响应无法解析');}
+  return VidSiftSummaryVerification.inspectSummary(data,{conversationId:id});
  }
  chrome.runtime.onMessage.addListener((message,sender,reply)=>{
   if(message.type==='VIDSIFT_SUMMARY_READER_PING'){reply({ok:true,protocol:1});return false;}
