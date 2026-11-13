@@ -7,18 +7,19 @@ function cancelSummaryJob(tabId){const job=_summaryTabJobs.get(tabId);if(job)job
 function summaryDeadline(promise,ms=12000){let timer;return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('已有总结核验超时，请稍后重试')),ms);})]).finally(()=>clearTimeout(timer));}
 function connectSummaryReader(tab){
  return new Promise((resolve,reject)=>{
-  let settled=false,busy=false,again=false;
-  const timer=setTimeout(()=>finish(Object.assign(Error('ChatGPT核验入口尚未就绪，请确认页面可访问后刷新核验'),{code:'READER_NOT_READY'})),18000);
+  let settled=false,busy=false,again=false,phase='navigation';
+  const timer=setTimeout(()=>finish(Object.assign(Error('ChatGPT核验入口尚未就绪，请打开可用的ChatGPT页面后刷新核验'),{code:'READER_'+phase.toUpperCase()+'_TIMEOUT'})),12000);
   function finish(error){if(settled)return;settled=true;clearTimeout(timer);chrome.tabs.onUpdated.removeListener(updated);error?reject(error):resolve();}
   async function attempt(){
    if(settled)return;if(busy){again=true;return;}busy=true;let current;
    try{
-    current=await chrome.tabs.get(tab.id);if(!/^https:\/\/chatgpt\.com\//.test(current?.url||''))return;
+    current=await chrome.tabs.get(tab.id);if(current?.discarded||current?.frozen)throw Object.assign(Error('ChatGPT核验页已休眠，正在更换核验入口'),{code:'READER_SUSPENDED'});if(!/^https:\/\/chatgpt\.com\//.test(current?.url||''))return;
+    phase='injection';
     await chrome.scripting.executeScript({target:{tabId:tab.id},files:['summary-verification.js','summary-verifier-content.js'],injectImmediately:true});
     if(settled)return;
-    const ping=await summaryDeadline(chrome.tabs.sendMessage(tab.id,{type:'VIDSIFT_SUMMARY_READER_PING'}));
+    phase='ping';const ping=await summaryDeadline(chrome.tabs.sendMessage(tab.id,{type:'VIDSIFT_SUMMARY_READER_PING'}),5000);
     if(!ping?.ok)throw Error('ChatGPT只读核验入口未就绪');finish();
-   }catch(error){if(current?.status==='complete')finish(Object.assign(error,{code:error.code||'READER_CONNECT_FAILED'}));}
+   }catch(error){if(!current||current.discarded||current.frozen||current.status==='complete')finish(Object.assign(error,{code:error.code||'READER_CONNECT_FAILED'}));}
    finally{busy=false;if(again){again=false;void attempt();}}
   }
   function updated(id,change){if(id===tab.id&&(change.url||change.status))void attempt();}
@@ -29,9 +30,9 @@ async function closeOwnedSummaryReader(reader){
  try{if(reader.owned&&reader.tabId!=null){const current=await chrome.tabs.get(reader.tabId).catch(()=>null);if(current?.active||current&&!/^https:\/\/chatgpt\.com\/?$/.test(current.url||''))reader.everUsed=true;if(current&&!reader.everUsed)await chrome.tabs.remove(reader.tabId).catch(()=>{});}}
  finally{reader.dispose?.();}
 }
-async function createSummaryReader(){
-  const tabs=await chrome.tabs.query({url:['https://chatgpt.com/*']});
-  let tab=tabs.find(t=>!new URL(t.url).searchParams.has('temporary-chat'));
+async function createSummaryReader(fresh=false){
+  const tabs=fresh?[]:await chrome.tabs.query({url:['https://chatgpt.com/*']});
+  let tab=tabs.filter(t=>!t.discarded&&!t.frozen&&t.status!=='unloaded'&&!new URL(t.url).searchParams.has('temporary-chat')).sort((a,b)=>Number(!!b.active)-Number(!!a.active)||Number(b.status==='complete')-Number(a.status==='complete')||(b.lastAccessed||0)-(a.lastAccessed||0))[0];
   const reader={tabId:tab?.id,owned:!tab,everUsed:false,users:0,closing:false},activatedBeforeCreate=new Set();
   const activated=info=>{if(reader.tabId==null)activatedBeforeCreate.add(info.tabId);else if(info.tabId===reader.tabId)reader.everUsed=true;};
   const navigated=(id,change)=>{if(id===reader.tabId&&change.url&&!/^https:\/\/chatgpt\.com\/?$/.test(change.url))reader.everUsed=true;};
@@ -40,7 +41,7 @@ async function createSummaryReader(){
    if(!tab){tab=await chrome.tabs.create({url:'https://chatgpt.com/',active:false});reader.tabId=tab.id;reader.everUsed=tab.active||activatedBeforeCreate.has(tab.id);}
    await connectSummaryReader(tab);
    return reader;
-  }catch(error){await closeOwnedSummaryReader(reader);throw error;}
+  }catch(error){await closeOwnedSummaryReader(reader);if(!reader.owned)return createSummaryReader(true);throw error;}
 }
 async function acquireSummaryReader(){
  if(!_summaryReader){const entry={promise:null};_summaryReader=entry;entry.promise=createSummaryReader().catch(error=>{if(_summaryReader===entry)_summaryReader=null;throw error;});}

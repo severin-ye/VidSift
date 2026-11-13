@@ -2,9 +2,9 @@
 // No daily browser profile, user conversation or Native registration is accessed.
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {chromium}=require('playwright');
-const root=path.resolve(__dirname,'..'),library=process.env.VIDSIFT_LIBRARY_ROOT;
+const root=process.env.VIDSIFT_EXTENSION_ROOT?path.resolve(process.env.VIDSIFT_EXTENSION_ROOT):path.resolve(__dirname,'..'),library=process.env.VIDSIFT_LIBRARY_ROOT;
 assert(library&&fs.existsSync(path.join(library,'manifest.json')),'VIDSIFT_LIBRARY_ROOT must be the built library extension');
-const art=path.join(root,'.task-artifacts','summary-reminder');fs.mkdirSync(art,{recursive:true});
+const art=path.resolve(__dirname,'..','.task-artifacts',process.env.VIDSIFT_EXTENSION_ROOT?'combined-summary-reminder':'summary-reminder');fs.mkdirSync(art,{recursive:true});
 const profile=fs.mkdtempSync(path.join(art,'profile-')),receiver=fs.mkdtempSync(path.join(art,'receiver-'));
 fs.cpSync(library,receiver,{recursive:true});const manifestFile=path.join(receiver,'manifest.json'),manifest=JSON.parse(fs.readFileSync(manifestFile));manifest.permissions=manifest.permissions.filter(p=>p!=='nativeMessaging');fs.writeFileSync(manifestFile,JSON.stringify(manifest));
 const report={owner:'summary-reminder-1113',profile,receiver,syntheticAPI:true,realExtensions:true,dailyProfileUsed:false,checks:[],passed:false};
@@ -35,6 +35,7 @@ async function waitHidden(page){await page.locator('#vidsift-summary-reminder').
  await page.goto('https://www.youtube.com/watch?v=abcdefghijk');await visible(page);await page.evaluate(()=>document.querySelector('ytd-watch-flexy').setAttribute('theater',''));await waitHidden(page);await page.evaluate(()=>document.querySelector('ytd-watch-flexy').removeAttribute('theater'));await visible(page);report.checks.push('YouTube theater state hides and restores folded');
  await page.goto('https://www.douyin.com/video/123456789');await visible(page);await page.evaluate(()=>document.querySelector('video').style.cssText='position:fixed;inset:0;width:100vw;height:100vh');await waitHidden(page);await page.evaluate(()=>document.querySelector('video').style.cssText='');await visible(page);report.checks.push('viewport-expanded video hides and restores folded');
  failRead=true;await entry.click();await page.locator('#vidsift-summary-reminder .refresh').click();await page.waitForFunction(()=>document.querySelector('#vidsift-summary-reminder')?.shadowRoot.querySelector('.count').textContent==='总结尚未核实',{},{timeout:45000});assert.equal(await page.locator('#vidsift-summary-reminder .record').count(),0);assert.match(await page.locator('#vidsift-summary-reminder .note').innerText(),/401|核实/);report.checks.push('401 is unknown, not a false zero-completed result');
+ const countBeforeSwitch=requestCount;await control.bringToFront();await page.bringToFront();await page.waitForTimeout(250);assert.equal(requestCount,countBeforeSwitch);assert.match(await entry.innerText(),/总结尚未核实/);report.checks.push('returning to video preserves failed result instead of restarting verification');
  failRead=false;await page.locator('#vidsift-summary-reminder .refresh').click();await page.waitForFunction(()=>document.querySelector('#vidsift-summary-reminder')?.shadowRoot.querySelector('.count').textContent==='已有 1 份总结',{},{timeout:45000});
  await control.evaluate(()=>chrome.storage.local.set({videoLibrarySettings:{enabled:true,reminderEnabled:false,extensionId:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}}));await waitHidden(page);assert.equal((await control.evaluate(()=>chrome.storage.local.get('customPrompt'))).customPrompt,'preserved custom prompt');report.checks.push('reminder settings switch hides UI while preserving custom prompt');
  assert(requests.every(r=>r.method==='GET'),'verification never sends prompts or creates conversation');report.checks.push('ChatGPT verification is GET-only; no summary body stored or returned');

@@ -22,3 +22,15 @@ test('reader works while unrelated page resources are still loading',async()=>{
  assert.ok(result,'API reader must not wait for whole-page load');assert.equal(options.injectImmediately,true);
  await f.ctx.releaseSummaryReader(result);
 });
+
+test('reader skips discarded or frozen tabs and prefers a recently used healthy page',async()=>{
+ const f=fixture();const tabs=[{id:1,url:'https://chatgpt.com/c/old',status:'unloaded',discarded:true},{id:2,url:'https://chatgpt.com/c/frozen',status:'complete',frozen:true},{id:3,url:'https://chatgpt.com/c/ready',status:'complete',lastAccessed:20},{id:4,url:'https://chatgpt.com/c/recent',status:'complete',lastAccessed:30}];
+ tabs.forEach(t=>f.tabs.set(t.id,t));f.chrome.tabs.query=async()=>tabs;
+ const reader=await f.ctx.acquireSummaryReader();assert.equal(reader.tabId,4);await f.ctx.releaseSummaryReader(reader);assert.deepEqual(f.removed,[]);
+});
+
+test('failed existing reader falls back once to an owned page without changing user tabs',async()=>{
+ const f=fixture();const old={id:1,url:'https://chatgpt.com/c/old',status:'complete'};f.tabs.set(1,old);f.chrome.tabs.query=async()=>[old];
+ f.chrome.scripting.executeScript=async options=>{if(options.target.tabId===1)throw Error('unavailable old renderer');return [];};
+ const reader=await f.ctx.acquireSummaryReader();assert.equal(reader.tabId,55);assert.equal(reader.owned,true);await f.ctx.releaseSummaryReader(reader);assert.deepEqual(f.removed,[55]);assert.equal(f.tabs.get(1),old);
+});
