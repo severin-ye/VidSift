@@ -10,7 +10,7 @@ async function prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,ope
   info=VidSiftVideoLibrary.normalizeSource({...info,title:videoTitle||info?.title});
   info.coverUrl=VidSiftVideoLibrary.normalizeCover(info.coverUrl);
   if(info.platform==='youtube')info.coverUrl='https://i.ytimg.com/vi/'+info.videoId+'/hqdefault.jpg';
-  if(info.platform==='bilibili'){
+  if(info.platform==='bilibili'&&!info.coverUrl){
    try{const response=await fetch('https://api.bilibili.com/x/web-interface/view?bvid='+encodeURIComponent(info.videoId),{credentials:'omit',signal:AbortSignal.timeout(5000)});const result=await response.json();if(response.ok&&result.code===0&&result.data?.bvid===info.videoId){info.coverUrl=VidSiftVideoLibrary.normalizeCover(result.data.pic)||info.coverUrl;if(!videoTitle)info.title=result.data.title||info.title;}}catch{}
   }
   if(!info.coverUrl&&Number.isInteger(tabId)){

@@ -5,7 +5,7 @@ const root=path.resolve(__dirname,'..'),art=path.join(root,'.task-artifacts','su
 const profile=fs.mkdtempSync(path.join(art,'profile-')),id='kggdkncbamdlhhihfkeldbbkppkgihad';
 const report={owner:'01a1cd4c',profile,syntheticAPI:true,dailyProfileUsed:false,checks:[]};
 fs.writeFileSync(path.join(art,'resource.json'),JSON.stringify({owner:report.owner,profile,purpose:'close source and queue generation acceptance',cleanup:'close context and remove this exact profile'},null,2));
-let context,control,worker;const conversations=new Map(),finished=new Set();let sends=0;
+let context,control,worker;const conversations=new Map(),finished=new Set(),failed=new Set();let sends=0;
 async function until(fn,timeout=30000){const end=Date.now()+timeout;while(Date.now()<end){if(await fn())return;await new Promise(r=>setTimeout(r,100));}throw Error('acceptance timeout');}
 const html=`<!doctype html><title>Queue fixture</title><form><div id="prompt-textarea" contenteditable="true"></div><input type="file" multiple><button type="button" data-testid="send-button">Send</button></form><script>
 const cid=crypto.randomUUID();document.querySelector('input').onchange=event=>{for(const file of event.target.files){const tile=document.createElement('div');tile.className='file-tile';tile.setAttribute('role','group');tile.setAttribute('aria-label',file.name);tile.textContent=file.name;document.querySelector('form').append(tile);}};
@@ -24,7 +24,7 @@ document.querySelector('button').onclick=async()=>{const text=document.querySele
   const cid=url.pathname.split('/').at(-1),conversation=conversations.get(cid);
   if(conversation){
    if(route.request().method()==='PATCH')return route.fulfill({json:{ok:true}});
-   return route.fulfill({json:{conversation_id:cid,title:'Fixture title already generated',create_time:conversation.created,mapping:{user:{message:conversation.message},reply:{parent:'user',message:{author:{role:'assistant'},status:finished.has(cid)?'finished_successfully':'in_progress',end_turn:finished.has(cid)}}}}});
+   return route.fulfill({json:{conversation_id:cid,title:'Fixture title already generated',create_time:conversation.created,mapping:{user:{message:conversation.message},reply:{parent:'user',message:{author:{role:'assistant'},status:failed.has(cid)?'failed':finished.has(cid)?'finished_successfully':'in_progress',end_turn:finished.has(cid)}}}}});
   }
   return route.fulfill({contentType:'text/html',body:html});
  });
@@ -34,15 +34,16 @@ document.querySelector('button').onclick=async()=>{const text=document.querySele
  await worker.evaluate(()=>{
   const realFetch=fetch;globalThis.fetch=async(url,options)=>{
    const u=new URL(url);if(u.hostname==='api.bilibili.com'){
-    if(u.pathname.endsWith('/view')){const bvid=u.searchParams.get('bvid');return new Response(JSON.stringify({code:0,data:{bvid,aid:1,cid:2,title:'Fixture '+bvid,duration:10,pages:[{cid:2,duration:10}]}}));}
+    if(u.pathname.endsWith('/view')){if(options?.credentials!=='include')throw Error('redundant library cover fetch must not be required');const bvid=u.searchParams.get('bvid');return new Response(JSON.stringify({code:0,data:{bvid,aid:1,cid:2,pic:'http://i1.hdslb.com/'+bvid+'.jpg',title:'Fixture '+bvid,duration:10,pages:[{cid:2,duration:10}]}}));}
     return new Response(JSON.stringify({data:{subtitle:{subtitles:[{lan:'zh',subtitle_url:'https://fixture.test/subtitle'}]}}}));
    }
    if(u.hostname==='fixture.test')return new Response(JSON.stringify({body:[{from:0,to:1,content:'Synthetic complete subtitle'}]}));
    return realFetch(url,options);
   };
+  globalThis.libraryRegistrations=[];const register=_videoLibrary.register.bind(_videoLibrary);_videoLibrary.register=async task=>{libraryRegistrations.push(task);return register(task);};_videoLibrary.drain=async()=>{};
  });
- await control.evaluate(()=>chrome.storage.local.set({videoLibrarySettings:{enabled:false},customPrompt:'Summarize this synthetic test subtitle.'}));
- const a=await context.newPage(),b=await context.newPage();await a.goto('https://www.bilibili.com/video/BVtestA');await b.goto('https://www.bilibili.com/video/BVtestB');
+ await control.evaluate(()=>chrome.storage.local.set({videoLibrarySettings:{enabled:true},customPrompt:'Summarize this synthetic test subtitle.'}));
+ const a=await context.newPage(),b=await context.newPage(),c=await context.newPage();await a.goto('https://www.bilibili.com/video/BVtestA');await b.goto('https://www.bilibili.com/video/BVtestB');await c.goto('https://www.bilibili.com/video/BVtestC');
  await control.evaluate(async()=>{
   window.notes=[];window.ports=[];const tabs=(await chrome.tabs.query({})).filter(t=>t.url?.includes('/video/BVtest'));
   for(const tab of tabs){const p=chrome.runtime.connect({name:'vidsift-video'});ports.push(p);p.onMessage.addListener(m=>notes.push({source:tab.id,...m}));p.postMessage({type:'START_VIDEO_TASK',sourceUrl:tab.url,openerTabId:tab.id,source:{},bgOpen:true,tempChat:false,screenshotSettings:{enabled:false}});}
@@ -50,14 +51,16 @@ document.querySelector('button').onclick=async()=>{const text=document.querySele
  });
  await until(()=>sends===1);await new Promise(r=>setTimeout(r,1200));
  assert.equal(sends,1,'second job must wait beyond send acknowledgement and generated title');
- assert.equal(await worker.evaluate(()=>_summaryQueue.length),2);
+ assert.equal(await worker.evaluate(()=>_summaryQueue.length),3);
  assert.equal((await control.evaluate(()=>chrome.tabs.query({}))).filter(t=>t.url?.includes('/video/BVtest')).length,0);
- report.checks.push('both source tabs closed immediately after submission; first summary sends once','second summary remains queued while first has generated title but unfinished response');
- finished.add([...conversations.keys()][0]);await until(()=>sends===2);assert.equal(sends,2);
+ report.checks.push('three source tabs closed immediately after submission; first summary sends once','later summaries remain queued while first has generated title but unfinished response');
+ failed.add([...conversations.keys()][0]);await until(()=>sends===2);assert.equal(sends,2);
+ finished.add([...conversations.keys()][1]);await until(()=>sends===3);
  for(const cid of conversations.keys())finished.add(cid);
  await until(()=>worker.evaluate(()=>_summaryQueue.length===0));
- const notes=await control.evaluate(()=>window.notes);assert.equal(notes.filter(n=>n.type==='ERROR').length,0,JSON.stringify(notes));assert.equal(notes.filter(n=>n.type==='DONE').length,2);
- report.checks.push('first generation completion releases second job','both summaries finish exactly once with no source tabs');
+ const notes=await control.evaluate(()=>window.notes);assert.equal(notes.filter(n=>n.type==='ERROR').length,1,JSON.stringify(notes));assert.match(notes.find(n=>n.type==='ERROR').text,/生成失败/);assert.equal(notes.filter(n=>n.type==='DONE').length,2);assert.equal(notes.filter(n=>n.type==='ACCEPTED').length,3);
+ const registered=await worker.evaluate(()=>libraryRegistrations);assert.equal(registered.length,3);for(const task of registered)assert.equal(task.source.coverUrl,'https://i1.hdslb.com/'+task.source.videoId+'.jpg@640w_360h_1c.jpg');
+ report.checks.push('explicit first generation failure releases second job without resend','second generation completion releases third job','all three closed-source summaries retain the matching normalized cover at library registration');
  report.passed=true;
 }catch(error){report.notifications=await control?.evaluate(()=>window.notes).catch(()=>[]);report.targets=await control?.evaluate(()=>chrome.tabs.query({})).then(tabs=>tabs.map(t=>({id:t.id,url:t.url,title:t.title}))).catch(()=>[]);report.queue=await worker?.evaluate(()=>_summaryQueue.map(j=>({id:j.task?.id,status:j.task?.statusText,cancelled:j.task?.cancelled}))).catch(()=>[]);report.error=error.stack;process.exitCode=1;}finally{
  if(context)await context.close();report.contextClosed=true;

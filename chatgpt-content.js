@@ -719,29 +719,51 @@
   }
 
   // A title or an older reply cannot release the summary queue.
-  function hasFinishedTaskResponse(data,requestMessageId){
+  function taskResponseOutcome(data,requestMessageId){
+    if(typeof requestMessageId!=='string'||!requestMessageId)return null;
     const mapping=data.mapping||{};
-    return Object.values(mapping).some(node=>{
-      if(node?.message?.author?.role!=='assistant'||node.message.status!=='finished_successfully'||node.message.end_turn!==true)return false;
+    let failure=null;
+    for(const node of Object.values(mapping)){
+      if(node?.message?.author?.role!=='assistant')continue;
+      let owned=false;
       const seen=new Set();let parent=mapping[node.parent];
       while(parent&&!seen.has(parent)){
         seen.add(parent);
-        if(parent.message?.author?.role==='user')return parent.message.id===requestMessageId;
+        if(parent.message?.author?.role==='user'){owned=parent.message.id===requestMessageId;break;}
         parent=mapping[parent.parent];
       }
-      return false;
-    });
+      if(!owned)continue;
+      const status=node.message.status;
+      if(status==='finished_successfully'&&node.message.end_turn===true)return 'completed';
+      // Only explicit error/cancellation labels terminate a failed request.
+      // finished_partial and unknown statuses can also describe unfinished work.
+      if(['failed','finished_with_error'].includes(status))failure='failed';
+      if(['cancelled','canceled'].includes(status))failure='cancelled';
+    }
+    return failure;
   }
-  async function waitForSummaryGeneration(msg,binding){
+  function hasFinishedTaskResponse(data,requestMessageId){
+    return taskResponseOutcome(data,requestMessageId)==='completed';
+  }
+  function createTemporaryGenerationTracker(initialNodes=document.querySelectorAll('[role="status"]')){
+    const complete=node=>/^(?:回答已完成|Response complete)[.!。！]?$/i.test((node.textContent||'').trim());
+    const previous=new Set([...initialNodes].filter(complete));
+    return ()=>{
+      const nodes=[...document.querySelectorAll('[role="status"]')];
+      for(const node of previous)if(!nodes.includes(node)||!complete(node))previous.delete(node);
+      // A fresh completion announcement is authoritative; text pausing is not.
+      const announced=nodes.some(node=>complete(node)&&!previous.has(node));
+      const busy=document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止流式传输"],button[aria-label="停止"],button[aria-label="Stop"]');
+      return announced&&!busy;
+    };
+  }
+  async function waitForSummaryGeneration(msg,binding,temporaryFinished){
     const deadline=Date.now()+30*60*1000;
     if(msg.tempChat){
-      let stable=0;
+      const finished=temporaryFinished||createTemporaryGenerationTracker();
       while(Date.now()<deadline){
         assertNotCancelled(msg.taskId);
-        const reply=[...document.querySelectorAll('[data-message-author-role="assistant"]')].some(node=>node.textContent.trim());
-        const busy=document.querySelector('[data-testid="stop-button"],button[aria-label="Stop streaming"],button[aria-label="停止流式传输"]');
-        stable=reply&&!busy?stable+1:0;
-        if(stable>=3)return;
+        if(finished())return;
         await new Promise(resolve=>setTimeout(resolve,1000));
       }
     }else{
@@ -755,7 +777,11 @@
         if(response?.ok){
           const data=await response.json();
           const owned=VidSiftConversationBinding.verify(data,{...task,id,messageId:task.requestMessageId,now:Date.now()});
-          if(owned.ok&&hasFinishedTaskResponse(data,task.requestMessageId))return;
+          if(owned.ok){
+            const outcome=taskResponseOutcome(data,task.requestMessageId);
+            if(outcome==='completed')return;
+            if(outcome)throw new Error('总结已发送，但本次 ChatGPT 生成'+(outcome==='cancelled'?'已停止':'失败')+'；没有重复发送，后续视频将继续处理');
+          }
         }else if(response&&[401,403].includes(response.status))throw new Error('总结已发送，但读取本次生成状态需要重新登录或访问验证；没有重复发送');
         await new Promise(resolve=>setTimeout(resolve,3000));
       }
@@ -907,6 +933,7 @@
             libraryBinding=captureSubmittedConversation(readComposerText(),msg.taskId);
             await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
           }
+          const temporaryFinished=msg.tempChat&&msg.awaitGeneration?createTemporaryGenerationTracker():null;
           await clickSend(msg.taskId, () => {
             const visible = getVisibleFileTiles();
             for (const tile of receipts) {
@@ -916,7 +943,7 @@
           submitted=true;
           if(msg.awaitGeneration)chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_SENT',taskId:msg.taskId}).catch(()=>{});
           if(msg.awaitGeneration){
-            generation=waitForSummaryGeneration(msg,libraryBinding).then(()=>reportTarget(msg,true),error=>{showError(error.message);reportTarget(msg,false,error.message);});
+            generation=waitForSummaryGeneration(msg,libraryBinding,temporaryFinished).then(()=>reportTarget(msg,true),error=>{showError(error.message);reportTarget(msg,false,error.message);});
           }else reportTarget(msg, true);
           if(msg.libraryEligible&&!msg.tempChat){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId});if(!receipt?.ok)showError('总结已发送，但本次视频的书库待办登记失败；详情已记录到日志');}
           // Submission succeeded — hide the save button now regardless of what happens next

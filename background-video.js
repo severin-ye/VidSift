@@ -42,8 +42,7 @@ async function sendVideoChatGPT(data){
  if(!target.ok){_targetCompletions.get(task.id)?.reject(new Error(target.error));throw new Error(target.error);}await target.completion;
 }
 async function sendVideoAIStudio(data){
- const {index,windowId,openerTabId}=await getTabInfo(data.openerTabId);
- const tab=await chrome.tabs.create({url:'https://aistudio.google.com/prompts/new_chat',active:false,index:index+1,...(openerTabId==null?{}:{openerTabId}),...(windowId==null?{}:{windowId})});
+ const tab=await createTaskTarget('https://aistudio.google.com/prompts/new_chat',false,data.openerTabId);
  recordTargetPhase(data.task,tab,'created-background');
  const completed=waitForTarget(data.task,tab.id);completed.catch(()=>{});
  _updateActiveTranscribeTask(data.task.tabId,'AI Studio 已在后台创建，正在连接页面上传脚本...');
@@ -120,6 +119,32 @@ const _videoWorkflow=new VideoWorkflow({
   _targetCompletions.get(task.id)?.reject(new Error(task.cancelReason+'，未自动发送'));
  }
 });
+async function captureTaskSource(task){
+ let source={...task.source},pageSource;
+ try{
+  const result=await chrome.scripting.executeScript({target:{tabId:task.tabId,frameIds:[0]},func:()=>({url:location.href,title:document.querySelector('h1')?.textContent||document.title,coverUrl:document.querySelector('meta[property="og:image"]')?.content||document.querySelector('video[poster]')?.poster||'',duration:document.querySelector('video')?.duration})});
+  const value=result[0]?.result;
+  if(VidSiftPlatforms.identify(value?.url)?.key===task.source.key)source={...source,title:String(value.title||'').trim(),coverUrl:VidSiftVideoLibrary.normalizeCover(value.coverUrl),...(Number.isFinite(value.duration)&&value.duration>0?{duration:value.duration}:{})};
+ }catch{}
+ if(task.source.platform==='douyin'){
+  try{const result=await chrome.scripting.executeScript({target:{tabId:task.tabId,frameIds:[0]},world:'MAIN',func:DouyinPageSource,args:[task.source.videoId]});const value=result[0]?.result;if(String(value?.videoId)===task.source.videoId)pageSource=value;}catch{}
+ }
+ return {source,pageSource};
+}
+async function prepareBilibiliSource(task,msg,captured){
+ const source=task.source;
+ const view=await (await fetch('https://api.bilibili.com/x/web-interface/view?bvid='+encodeURIComponent(source.videoId),{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
+ if(view.code!==0||!view.data?.aid||view.data.bvid!==source.videoId)throw new Error('B站视频信息读取失败：'+(view.message||view.code));
+ if(source.part>1&&!view.data.pages?.[source.part-1]?.cid)throw new Error('未找到所选 B站分P，未发送其他分P的内容');
+ const page=view.data.pages?.[source.part-1],cid=page?.cid||view.data.cid;
+ const result={...captured.source,...source,title:view.data.title||captured.source.title||source.videoId,duration:page?.duration||view.data.duration,coverUrl:VidSiftVideoLibrary.normalizeCover(view.data.pic)||captured.source.coverUrl||'',subtitle:null,bili:{aid:view.data.aid,cid,pageUrl:source.url}};
+ if(!msg.forceAudio){
+  const player=await (await fetch(`https://api.bilibili.com/x/player/wbi/v2?aid=${view.data.aid}&cid=${cid}`,{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
+  const tracks=player.data?.subtitle?.subtitles||[],track=tracks.find(t=>/zh/.test(t.lan))||tracks[0];
+  if(track){const url=track.subtitle_url.startsWith('//')?'https:'+track.subtitle_url:track.subtitle_url;const data=await (await fetch(url,{credentials:'include',signal:AbortSignal.timeout(20000)})).json();if(data.body?.length)result.subtitle={body:data.body,lan:track.lan};}
+ }
+ return result;
+}
 async function startVideoSummary(msg,notify){
  const source=VidSiftPlatforms.identify(msg.sourceUrl);
  if(!source)throw new Error('视频来源无效');
@@ -131,28 +156,21 @@ async function startVideoSummary(msg,notify){
  _setActiveTranscribeTask(tabId,'video','已接收视频，正在后台取得字幕...');
  const configuration=(async()=>{await DouyinLocalSettings.migrate(chrome.storage.local);return chrome.storage.local.get(['selfHostedApiUrl','selfHostedApiToken','transcribeService','localModel','localDevice','douyinLocalSettings','groqSettings']);})();
  configuration.catch(()=>{});
+ // Capture only metadata in parallel. Provider work and GPT generation stay FIFO.
+ const preparation=(async()=>{const captured=await captureTaskSource(task);const source=task.source.platform==='bilibili'?await prepareBilibiliSource(task,msg,captured):captured.source;task.source=source;diagnoseTask(task,'source.prepared',{hasImage:!!source.coverUrl});return {source,pageSource:captured.pageSource};})();
+ preparation.catch(()=>{});
  task.summaryQueued=true;msg.summaryQueued=true;
- try{return await runSummaryJob({legacyTask:task,biliTabId:tabId},async()=>{
+ try{const running=runSummaryJob({legacyTask:task,biliTabId:tabId},async()=>{
   await _legacyGuard.check(task);
   const stored=await configuration,selected=DouyinLocalSettings.resolve(source.platform,stored);
   Object.assign(msg,{transcribeService:selected.service,model:selected.model,device:selected.device,localSettings:selected.settings,groqSettings:selected.groq,selfHostedUrl:stored.selfHostedApiUrl,selfHostedToken:stored.selfHostedApiToken});
+  const prepared=await preparation;await _legacyGuard.check(task);
+  msg.source=prepared.source;msg.pageSource=prepared.pageSource;
   if(source.platform!=='bilibili'){
    await _legacyGuard.check(task);msg.sourceClosed=task.sourceClosed===true;
    finishLegacyTask(task);return await _videoWorkflow.start(msg,notify);
   }
-  const view=await (await fetch('https://api.bilibili.com/x/web-interface/view?bvid='+encodeURIComponent(source.videoId),{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
-  if(view.code!==0||!view.data?.aid||view.data.bvid!==source.videoId)throw new Error('B站视频信息读取失败：'+(view.message||view.code));
-  if(source.part>1&&!view.data.pages?.[source.part-1]?.cid)throw new Error('未找到所选 B站分P，未发送其他分P的内容');
-  const page=view.data.pages?.[source.part-1],cid=page?.cid||view.data.cid;
-  let subtitle=null;
-  if(!msg.forceAudio){
-   const player=await (await fetch(`https://api.bilibili.com/x/player/wbi/v2?aid=${view.data.aid}&cid=${cid}`,{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
-   const tracks=player.data?.subtitle?.subtitles||[],track=tracks.find(t=>/zh/.test(t.lan))||tracks[0];
-   if(track){const url=track.subtitle_url.startsWith('//')?'https:'+track.subtitle_url:track.subtitle_url;const data=await (await fetch(url,{credentials:'include',signal:AbortSignal.timeout(20000)})).json();if(data.body?.length)subtitle={body:data.body,lan:track.lan};}
-  }
-  await _legacyGuard.check(task);
-  const title=view.data.title||source.videoId;
-  msg.source={...source,title,duration:page?.duration||view.data.duration,coverUrl:view.data.pic||'',subtitle,bili:{aid:view.data.aid,cid,pageUrl:source.url}};
+  const {title,subtitle}=prepared.source;
   if(subtitle&&!ScreenshotSettings.normalize(msg.screenshotSettings).enabled){
    await handleTask({...msg,taskType:'chatgpt',biliTabId:tabId,videoTitle:title,bvid:source.videoId,file:{name:source.videoId+'.srt',content:VidSiftPlatforms.toSrt(subtitle.body)}},notify,task);
   }else{
@@ -160,7 +178,8 @@ async function startVideoSummary(msg,notify){
    finishLegacyTask(task);
    return await _videoWorkflow.start(msg,notify);
   }
- });}finally{finishLegacyTask(task);}
+ });notify('ACCEPTED','后台已接收并加入队列，可关闭源视频页');return await running;
+ }catch(error){diagnoseTask(task,'task.failed',{category:VidSiftDiagnostics.category(error),errorName:error.name});throw error;}finally{finishLegacyTask(task);}
 }
 chrome.runtime.onConnect.addListener(port=>{
  if(port.name!=='vidsift-video')return;

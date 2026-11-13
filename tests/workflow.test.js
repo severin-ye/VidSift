@@ -51,6 +51,17 @@ test('switching work during browser snapshot prevents native download and send',
  f.deps.getTab=async()=>({url:current});f.deps.snapshot=async()=>{reached();await gate;return null;};f.client.resolve=async()=>{downloads++;return {images:[]};};
  const running=f.workflow.start({openerTabId:1,sourceUrl:current},()=>{});await waiting;current='https://www.douyin.com/video/222';release();await assert.rejects(running,/源视频已切换/);assert.equal(downloads,0);assert.equal(f.sent.length,0);
 });
+
+test('closed queued Douyin source uses its admission snapshot and cover without page access',async()=>{
+ const id='7695816752525053222',url='https://www.douyin.com/video/'+id;
+ const f=fixture({platform:'douyin',videoId:id,subtitle:{body:[{from:0,to:1,content:'captured'}]},images:[]});let request;
+ f.deps.getTab=async()=>{throw Error('must not read closed tab');};f.deps.snapshot=async()=>{throw Error('must not resnapshot');};
+ f.client.resolve=async r=>{request=r;return {platform:'douyin',videoId:id,images:[],subtitle:{body:[{from:0,to:1,content:'captured'}]}};};
+ const pageSource={videoId:id,coverUrl:'https://p3-pc.douyinpic.com/fixture.jpg',douyin:{videoId:id,videoUrl:'https://v9.douyinvod.com/current.mp4'}};
+ const running=f.workflow.start({openerTabId:1,sourceUrl:url,sourceClosed:true,pageSource});await new Promise(setImmediate);f.complete();await running;
+ assert.equal(request.source.douyin.videoUrl,pageSource.douyin.videoUrl);assert.equal(f.sent[0].source.coverUrl,pageSource.coverUrl);
+ const mismatch=fixture({images:[]});await assert.rejects(mismatch.workflow.start({openerTabId:1,sourceUrl:url,sourceClosed:true,pageSource:{videoId:'wrong'}}),/不一致/);assert.equal(mismatch.sent.length,0);
+});
 test('captions and pictures use ChatGPT; assets remain until upload acknowledged',async()=>{
  const f=fixture({subtitle:{body:[{from:0,to:1,content:'hi'}]},images:[{assetId:'img'}],videoId:'abc123XYZ_0',title:'title',platform:'youtube'});
  const task=f.workflow.start({openerTabId:1,sourceUrl:'https://www.youtube.com/watch?v=abc123XYZ_0'},()=>{});
