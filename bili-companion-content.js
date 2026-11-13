@@ -7,7 +7,7 @@
  if(!claim?.ok)return;
  const source=claim.source;
  const matches=()=>{try{const u=new URL(location.href);return u.pathname.match(/^\/(?:zh-Han[st]\/)?video\/(BV\w+)\/?$/)?.[1]===source.videoId&&Math.max(1,parseInt(u.searchParams.get('p'),10)||1)===source.part;}catch{return false;}};
- let video=null,stopped=false,started=false,lastPosition=0,lastAdvance=Date.now(),lastReport=0,timer;
+ let video=null,stopped=false,started=false,lastPosition=0,lastAdvance=Date.now(),lastReport=0,reportedAdvance=false,timer;
  const listeners=[];
  function listen(target,name,handler){target.addEventListener(name,handler,true);listeners.push(()=>target.removeEventListener(name,handler,true));}
  function detach(){clearInterval(timer);for(const remove of listeners)remove();}
@@ -15,6 +15,7 @@
  chrome.runtime.onMessage.addListener(release);
  async function report(){
   lastReport=Date.now();
+  if(video.currentTime>0.2)reportedAdvance=true;
   try{const response=await send({type:'VIDSIFT_COMPANION_EVENT',event:'progress',url:location.href,position:video.currentTime,duration:video.duration});if(!response?.ok&&!stopped){stopped=true;detach();video.pause();}}catch{if(!stopped){stopped=true;detach();video.pause();}}
  }
  async function finish(event,reason){
@@ -56,7 +57,8 @@
   if(Date.now()-lastAdvance>90000){await finish('failed','官方播放器长时间没有播放进度');return;}
   if(!started)return;
   if(video.currentTime>lastPosition+0.2){lastPosition=video.currentTime;lastAdvance=Date.now();}
-  if(lastReport&&Date.now()-lastReport<10000)return;
+  // Report the first actual advancement promptly, even if play() resolved at 0.
+  if(lastReport&&(reportedAdvance||video.currentTime<=0.2)&&Date.now()-lastReport<10000)return;
   await report();
  },1000);
 })();
