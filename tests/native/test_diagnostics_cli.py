@@ -64,6 +64,15 @@ def table(entries, compressed=False):
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_library_settings_are_allowlisted_without_private_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            (p/'000001.log').write_bytes(record(batch(1, [('videoLibrarySettings', {'enabled': True, 'reminderEnabled': False, 'extensionId': 'ajjcbhalcgpmelnmlnheefbfikdgmjdp', 'unknownSecret': 'PRIVATECONFIG'})])))
+            result = d.read_store(p)
+            self.assertEqual(result['libraryConfig']['reminderEnabled'], False)
+            self.assertEqual(result['libraryConfig']['extensionId'], 'ajjcbhalcgpmelnmlnheefbfikdgmjdp')
+            self.assertNotIn('PRIVATECONFIG', json.dumps(result))
+
     def test_fragmented_wal_sequence_delete_and_privacy(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp)
