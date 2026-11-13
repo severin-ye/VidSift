@@ -29,7 +29,7 @@
   shadow.addEventListener('keydown',e=>{if(e.key==='Escape'){expanded=false;render();button.focus();}});
  }
  function render(){
-  mount();const visible=!disabled&&!!source&&!immersive&&(records.length>0||unknown>0||!!cursor||!!error||(expanded&&loading));
+  mount();const visible=!disabled&&!!source&&!immersive&&(records.length>0||unknown>0||!!cursor||!!error||loading);
   host.style.display=visible?'block':'none';host.dataset.viewing=String(immersive);host.dataset.state=error?'error':unknown?'partial':loading?'loading':'ready';
   button.hidden=expanded;panel.hidden=!expanded;button.setAttribute('aria-expanded',String(expanded));
   const label=records.length?'已有 '+records.length+' 份总结':error||unknown?'总结尚未核实':loading?'正在核验已有总结':'还有记录待核验';
