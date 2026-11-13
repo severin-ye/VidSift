@@ -1,3 +1,5 @@
+> 此分支为2026-11-13已放弃的“总结伴播”Git归档，不是正式发布版；实现状态与未完成项见[归档说明](archive/summary-companion-20261113/README.md)。
+
 <p align="center">
   <img src="./icons/logo-a3-master.png" alt="知行视频总结 Logo：黑色资料卡与橙色摘要卡" width="180">
 </p>
