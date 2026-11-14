@@ -123,6 +123,7 @@
     const button = document.createElement('button');
     _retryFailedBtn = button;
     button.textContent = `重试失败附件：${error.attachment.name}`;
+    button.title = button.textContent;
     button.style.cssText = getFloatingActionButtonStyle(224, '#2563eb');
     button.addEventListener('click', async () => {
       if (_taskActive) return;
@@ -150,8 +151,9 @@
       `bottom:${bottomPx}px;` +
       `background:${background};color:#fff;border:none;cursor:pointer;` +
       'padding:8px 14px;border-radius:8px;font-size:13px;' +
+      'max-width:min(180px,calc(100vw - 32px));box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
       'font-family:system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3);' +
-      'display:flex;align-items:center;gap:6px;';
+      'display:block;';
   }
 
   function showSaveButton(fileName, fileContent) {
