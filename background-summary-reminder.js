@@ -60,8 +60,11 @@ async function verifySummaryIds(ids,valid=()=>true){
  finally{await releaseSummaryReader(reader);}
 }
 function summarySenderSource(sender){
- if(sender.id!==chrome.runtime.id||!sender.tab||!sender.url)throw Error('已有总结查询仅允许当前视频页面');
- return VidSiftVideoLibrary.normalizeSource({url:sender.url});
+ if(sender.id!==chrome.runtime.id||!sender.tab||!sender.url||sender.frameId!==0||!sender.tab.url||new URL(sender.url).origin!==new URL(sender.tab.url).origin)throw Error('已有总结查询仅允许当前视频页面');
+ // Chrome keeps sender.url at the document's original URL after pushState.
+ // The browser-provided tab snapshot follows SPA navigation; summaryPage still
+ // checks it against both the requested video and a fresh tabs.get result.
+ return VidSiftVideoLibrary.normalizeSource({url:sender.tab.url});
 }
 function summaryDiagnosticId(tabId,video){const part=video.platform==='bilibili'?new URL(video.url).searchParams.get('p')||1:1;return 'reminder_'+tabId+'_'+video.videoId+'_'+part;}
 async function summaryPage(message,sender){
