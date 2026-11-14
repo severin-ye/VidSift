@@ -1,6 +1,6 @@
 {
   "name": "vidsift",
-  "version": "5.11.2",
+  "version": "5.11.3",
   "private": true,
   "description": "B站、YouTube、抖音内容提取并发送到 ChatGPT / AI Studio",
   "license": "MIT",

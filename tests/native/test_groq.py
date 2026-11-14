@@ -144,3 +144,37 @@ class GroqTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'未截断'):service.transcribe_groq(descriptor,job,lambda _:None)
             self.assertEqual(len(commands),1);self.assertNotIn('-t',commands[0]);self.assertNotIn('-ss',commands[0])
             self.assertFalse(list(service.local_audio.root.glob('*.m4a')))
+
+    def test_long_audio_uses_duration_budget_and_keeps_full_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service=host.Service(Path(directory));source=Path(directory)/'audio'
+            with source.open('wb') as f: f.truncate(65_529_638)
+            duration=2697.747;descriptor=service.local_audio.add(source,'123',duration,{})
+            job=host.Job('child');commands=[]
+            reply={'result':host.groq_result({'duration':duration,'segments':[{'start':0,'end':2,'text':'原文'}]},duration,'whisper-large-v3')}
+            def run(command,timeout):
+                commands.append(command)
+                if '--groq-worker' in command:return json.dumps(reply),''
+                Path(command[-1]).write_bytes(b'compressed-full-audio')
+                return 'out_time_us=2697747000\nprogress=end\n',''
+            with patch.object(host,'find_ffmpeg',return_value='ffmpeg'),patch.object(job,'run',side_effect=run):
+                result=service.transcribe_groq({**descriptor,'model':'whisper-large-v3'},job,lambda _:None)
+            self.assertEqual(commands[0][commands[0].index('-b:a')+1],'48k')
+            self.assertNotIn('-t',commands[0]);self.assertNotIn('-ss',commands[0])
+            self.assertEqual(result['duration'],duration);self.assertEqual(result['inputBytes'],65_529_638)
+            self.assertFalse(list(service.local_audio.root.glob('*.m4a')))
+
+    def test_compression_rejects_incomplete_audio_before_upload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service=host.Service(Path(directory));source=Path(directory)/'audio'
+            with source.open('wb') as f:f.truncate(25_000_000)
+            descriptor=service.local_audio.add(source,'123',60,{})
+            job=host.Job('child');commands=[]
+            def run(command,timeout):
+                commands.append(command)
+                if '--groq-worker' in command:return json.dumps({'result':{'srt':'unexpected upload'}}),''
+                Path(command[-1]).write_bytes(b'incomplete')
+                return 'out_time_us=30000000\nprogress=end\n',''
+            with patch.object(host,'find_ffmpeg',return_value='ffmpeg'),patch.object(job,'run',side_effect=run):
+                with self.assertRaisesRegex(ValueError,'时长'):service.transcribe_groq(descriptor,job,lambda _:None)
+            self.assertEqual(len(commands),1);self.assertFalse(list(service.local_audio.root.glob('*.m4a')))

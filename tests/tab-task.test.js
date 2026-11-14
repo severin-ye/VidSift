@@ -127,3 +127,21 @@ test('canceling a queued video skips only that item and lets the next video run'
  await new Promise(setImmediate);await f.dispatch({type:'CANCEL_VIDEO_TASK',tabId:8});release();
  const notes=await Promise.all([a,b,c]);assert.equal(notes[1].at(-1).type,'ERROR');assert.equal(notes[2].at(-1).type,'DONE');assert.equal(f.created.length,2);
 });
+
+test('Groq terminal failure is retained after workflow and summary queue release',async()=>{
+ const f=fixture(),sourceUrl='https://www.douyin.com/video/123';
+ f.context.chrome.tabs.get=async id=>({id,url:sourceUrl});
+ f.context.chrome.scripting={executeScript:async()=>[{result:{url:sourceUrl,title:'test video',videoId:'123'}}]};
+ vm.runInContext(`Object.assign(_videoWorkflow.deps,{
+  client:()=>({resolve:async()=>({videoId:'123',duration:2700,localAudio:{id:'audio'}}),release:async()=>{},close(){}}),
+  loadLocalMedia:async()=>null,saveLocalMedia:async()=>{},finishLocalMedia:async()=>{},
+  transcribe:async(_audio,_data,notify)=>{notify('STATUS','正在压缩完整音频供 Groq 上传');throw new Error('Groq 压缩后仍超过24MB');}
+ });`,f.context);
+ const notes=[];
+ f.context.recordNote=(type,text)=>notes.push({type,text});
+ await assert.rejects(vm.runInContext(`startVideoSummary({sourceUrl:'${sourceUrl}',openerTabId:7,transcribeService:'groq'},recordNote)`,f.context),/超过24MB/);
+ const state=await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7});
+ assert.equal(state.active,false);assert.equal(state.statusText,'Groq 压缩后仍超过24MB');
+ assert.equal(state.queuePosition,undefined);assert.equal(vm.runInContext('_summaryQueue.length',f.context),0);
+ assert.equal(notes.at(-1).type,'ERROR');assert.equal(f.created.length,0);
+});

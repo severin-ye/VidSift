@@ -999,7 +999,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.8.0', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.11.3', 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
@@ -1055,6 +1055,12 @@ def validate_audio_duration(progress_output, expected):
     return actual
 
 
+def groq_compression_bitrate(duration):
+    # Leave room for AAC/container overhead while keeping the entire recording.
+    budget = GROQ_UPLOAD_LIMIT * .85 * 8 / duration
+    return next((rate for rate in (64, 48, 32, 24, 16) if rate * 1000 <= budget), 16)
+
+
 class Service:
     def transcribe_groq(self, request, job, progress):
         job.check()
@@ -1073,8 +1079,11 @@ class Service:
                 ffmpeg = find_ffmpeg()
                 if not ffmpeg: raise ValueError('Groq 大音频压缩需要 FFmpeg')
                 temporary = cache.root / (uuid.uuid4().hex + '.m4a')
-                progress('正在压缩完整音频供 Groq 上传')
-                job.run([ffmpeg,'-nostdin','-hide_banner','-loglevel','error','-i',str(path),'-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','aac','-b:a','64k','-y',str(temporary)], timeout=180)
+                bitrate = groq_compression_bitrate(entry['duration'])
+                progress(f'正在压缩完整音频供 Groq 上传（全长 {entry["duration"] / 60:.1f} 分钟）')
+                output, _ = job.run([ffmpeg,'-nostdin','-hide_banner','-loglevel','error','-i',str(path),'-map','0:a:0','-vn','-ac','1','-ar','16000','-c:a','aac','-b:a',f'{bitrate}k','-progress','pipe:1','-nostats','-y',str(temporary)], timeout=180)
+                if 0 < temporary.stat().st_size <= GROQ_UPLOAD_LIMIT:
+                    validate_audio_duration(output, entry['duration'])
                 path = temporary
             uploaded_bytes = path.stat().st_size
             if not 0 < uploaded_bytes <= GROQ_UPLOAD_LIMIT: raise ValueError('Groq 压缩后仍超过 24 MB，未上传且未截断音频；请缩短音频')

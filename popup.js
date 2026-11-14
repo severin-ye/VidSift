@@ -287,7 +287,8 @@ async function run() {
       if(msg.type==='ACCEPTED'){canClose=true;cancelBtn.style.display='';runBtn.disabled=true;setStatus(msg.text);}
       if(msg.type==='STATUS')setStatus(msg.text);
       if(msg.type==='ERROR'||msg.type==='DONE'){
-        if(msg.type==='ERROR')showError(msg.text);else setStatus(msg.text);
+        setStatus(msg.text);
+        if(msg.type==='ERROR')showError(msg.text);
         isRunning=false;cancelBtn.style.display='none';activeTranscribeTask=null;runBtn.disabled=false;updateUI();
       }
     });
