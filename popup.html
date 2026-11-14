@@ -9,8 +9,17 @@
 <body>
 <div class="container">
 
+  <section id="summaryPanel" hidden aria-label="视频总结评分与切换">
+    <label for="summaryRating">当前总结评分</label>
+    <select id="summaryRating" disabled><option value="unknown" disabled selected>评分尚未读取</option><option value="">未评分</option><option value="1">1 分</option><option value="2">2 分</option><option value="3">3 分</option><option value="4">4 分</option><option value="5">5 分</option><option value="6">6 分</option><option value="7">7 分</option><option value="8">8 分</option><option value="9">9 分</option><option value="10">10 分</option></select>
+    <p id="summaryState" role="status" aria-live="polite">正在读取书库…</p>
+    <h1 id="summaryTitle"></h1><p id="summaryCurrent"></p>
+    <h2>同视频已保存的总结对话</h2><ul id="summaryList"></ul>
+    <button id="summaryNext" type="button" hidden>下一页</button>
+    <button id="summaryRetry" type="button">重新读取</button>
+  </section>
   <!-- Options -->
-  <div class="option-area" id="optionArea">
+  <div class="option-area" id="optionArea" style="display:none">
     <label class="checkbox-label"><input type="checkbox" id="screenshotCheckbox"><span id="screenshotLabel">图片提取·关</span></label>
     <label class="checkbox-label">
       <input type="checkbox" id="tempChatCheckbox">
@@ -45,6 +54,7 @@
 <script src="screenshot-settings.js"></script>
 <script src="audio-settings.js"></script>
 <script src="douyin-local-settings.js"></script>
+<script src="popup-summary.js"></script>
 <script src="popup.js"></script>
 </body>
 </html>

@@ -308,6 +308,11 @@ runBtn.addEventListener('click', run);
 // Init: load transcribeService config, check if current page is bilibili video, pre-check subtitle
 (async () => {
   try {
+    const [initialTab] = await chrome.tabs.query({active:true,currentWindow:true});
+    if(globalThis.VidSiftSummaryPopup?.conversationUrl(initialTab?.url)){
+      await VidSiftSummaryPopup.open(initialTab);return;
+    }
+    document.getElementById('optionArea').style.display='';
     // 先应用统一转写默认，再读取本次选择。
     await DouyinLocalSettings.migrate(chrome.storage.local);
     const storageResult = await chrome.storage.local.get(['transcribeService', 'localModel', 'localDevice', 'screenshotSettings','audioSettings','douyinTranscribeService','douyinLocalSettings','groqSettings']);

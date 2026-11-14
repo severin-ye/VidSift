@@ -1,5 +1,5 @@
 'use strict';
-importScripts('task-diagnostics.js','audio-settings.js','douyin-local-settings.js','local-transcription.js','local-media-cache.js','attachment-transfer.js','platforms.js','native-client.js','groq-credential-prompt.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js');
+importScripts('task-diagnostics.js','audio-settings.js','douyin-local-settings.js','local-transcription.js','local-media-cache.js','attachment-transfer.js','platforms.js','native-client.js','groq-credential-prompt.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js','background-summary-popup.js');
 
 const _diagnostics=VidSiftDiagnostics.create(chrome.storage?.local,{version:chrome.runtime.getManifest?.().version||'unknown'});
 importScripts('background-errors.js');

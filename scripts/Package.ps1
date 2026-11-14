@@ -24,6 +24,7 @@ try {
  $items+=@('douyin-local-settings.js','local-transcription.js','local-media-cache.js','offscreen-local.js','whisper-worker.js','options-local.js')
  $items+=@('groq-credential-prompt.js','groq-key.html','groq-key.js','groq-key.css')
  $items+=@('summary-verification.js','summary-verifier-content.js','summary-lookup.js','background-summary-reminder.js','summary-reminder.js')
+ $items+=@('background-summary-popup.js','popup-summary.js')
  foreach($item in $items){
   if(!(Test-Path -LiteralPath $item)){throw "Package input missing: $item"}
   Copy-Item -LiteralPath $item -Destination $stage -Recurse -Force
