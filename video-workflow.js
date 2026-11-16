@@ -13,14 +13,16 @@
    }
    check();
    if(task.sourceClosed)return;
-   const now=this.deps.identify(tab.url||'');
-   if(!now||now.key!==task.source.key)throw new Error('源视频已切换，已停止发送旧视频内容');
+   const now=task.source.frameUrl&&this.deps.resolveSource?await this.deps.resolveSource(tab):this.deps.identify(tab.url||'');
+   check();
+   if(!now||now.key!==task.source.key||task.source.frameUrl&&now.frameId!==task.source.frameId)throw new Error('源视频已切换，已停止发送旧视频内容');
   }
   async start(msg,notify=()=>{}){
    const d=this.deps,tabId=msg.openerTabId,source=d.identify(msg.sourceUrl);
    if(!source)throw new Error('当前页面不是支持的视频页面');
    if(this.tasks.has(tabId)||d.existing(tabId))throw new Error('当前视频已有任务进行中，请等待或取消');
-   const task={tabId,source,id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,summaryQueued:msg.summaryQueued===true,sourceClosed:msg.sourceClosed===true,cancelled:false,controller:new AbortController()};
+   if(msg.source?.key&&msg.source.key!==source.key)throw new Error('已采集作品与点击的视频不一致，未发送内容');
+   const task={tabId,source:{...msg.source,...source,...(msg.source?.frameUrl?{frameUrl:msg.source.frameUrl,frameId:msg.source.frameId,videoIndex:msg.source.videoIndex,pageUrl:msg.source.pageUrl}:{})},id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,summaryQueued:msg.summaryQueued===true,sourceClosed:msg.sourceClosed===true,cancelled:false,controller:new AbortController()};
    this.tasks.set(tabId,task);d.lock(tabId,'video','正在提取视频内容...');
    const log=(stage,value)=>{try{d.diagnostic?.(task,stage,value);}catch{}};log('task.started');
    const status=(type,text)=>{if(this.tasks.get(tabId)===task)d.lock(tabId,'video',text);notify(type,text);};let assets=[],localAudio,localOutcome='failed';

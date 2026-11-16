@@ -11,7 +11,7 @@ async function fixture(initial={active:false}){
   ScreenshotSettings:{normalize:()=>({enabled:false})},AudioSettings:{normalize:()=>({})},
   VidSiftPlatforms:{identify:url=>url?.includes('douyin.com')?{platform:'douyin',videoId:'123'}:null},
   DouyinLocalSettings:{migrate:async()=>{},resolve:()=>({service:'groq'})},
-  chrome:{storage:{local:{get:async()=>({}),set:async()=>{}}},tabs:{query:async()=>[{id:7,url:'https://www.douyin.com/video/123'}]},runtime:{connect:()=>port,sendMessage:async msg=>msg.type==='GET_TAB_TRANSCRIBE_STATUS'?state:{},openOptionsPage(){}}}});
+  chrome:{storage:{local:{get:async()=>({}),set:async()=>{}}},tabs:{query:async()=>[{id:7,url:'https://www.douyin.com/video/123'}]},runtime:{connect:()=>port,sendMessage:async msg=>msg.type==='GET_TAB_TRANSCRIBE_STATUS'?state:msg.type==='VIDSIFT_DISCOVER_SOURCE'?{ok:true,snapshot:{source:{platform:'douyin',videoId:'123',url:'https://www.douyin.com/video/123'}}}:{},openOptionsPage(){}}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'..','popup.js'),'utf8'),context,{filename:'popup.js'});
  await new Promise(setImmediate);
  return {element,context,emit:msg=>listeners.forEach(fn=>fn(msg)),poll:async next=>{state=next;await intervals[0]();}};

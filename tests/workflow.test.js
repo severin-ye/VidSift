@@ -1,5 +1,16 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');
 const {VideoWorkflow}=require('../video-workflow.js');
+test('closed admission snapshot remains the source after same-URL feed changes without page reads',async()=>{
+ const f=fixture({subtitle:{body:[{from:0,to:1,content:'captured'}]},images:[],videoId:'111',platform:'douyin'});let request;
+ f.deps.getTab=async()=>{throw Error('must not rescan admitted source');};f.client.resolve=async r=>{request=r;return {subtitle:{body:[{from:0,to:1,content:'captured'}]},images:[],videoId:'111',platform:'douyin'};};
+ const pageSource={videoId:'111',douyin:{videoId:'111',videoUrl:'https://v.douyinvod.com/111.mp4'}};
+ const run=f.workflow.start({openerTabId:1,sourceUrl:'https://www.douyin.com/video/111',sourceClosed:true,pageSource});await new Promise(setImmediate);assert.equal(request.source.videoId,'111');assert.equal(f.sent.length,1);f.complete();await run;
+});
+test('same-URL change in discovered player prevents forwarding and checks frame identity',async()=>{
+ const f=fixture({images:[]}),source={key:'douyin:111',platform:'douyin',videoId:'111',frameUrl:'https://www.douyin.com/follow',frameId:0};
+ f.deps.getTab=async()=>({url:source.frameUrl});f.deps.resolveSource=async()=>({...source,key:'douyin:222',videoId:'222'});
+ await assert.rejects(f.workflow.start({openerTabId:1,sourceUrl:'https://www.douyin.com/video/111',source}),/切换/);assert.equal(f.sent.length,0);
+});
 function fixture(result){
  const sent=[],released=[];let resolveTarget;
  const client={resolve:async()=>result,readAsset:async a=>({name:a+'.jpg',mime:'image/jpeg',base64:'YWJj'}),readPcmWindow:async()=>{throw Error('unexpected PCM read in workflow orchestration test');},release:async a=>released.push(...a),close(){},cancel(){}};

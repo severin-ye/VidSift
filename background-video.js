@@ -23,7 +23,7 @@ async function verifySourceChange(task){
  // cancel the task, never an event's old URL or a mere change of focused tab.
  const current=await chrome.tabs.get(task.tabId);
  if(_videoWorkflow.tasks.get(task.tabId)!==task||task.cancelled)return;
- const source=VidSiftPlatforms.identify(current.url||'');
+ const source=task.source.frameUrl?(await VidSiftCurrentVideo.discover(chrome,current,{capture:false})).source:VidSiftPlatforms.identify(current.url||'');
  if(source?.key!==task.source.key){task.cancelSourceKey=source?.key||null;_videoWorkflow.cancel(task.tabId,source?'原视频页当前作品已改变，已停止发送旧作品':'原视频页当前网址已离开该作品，已停止发送');}
 }
 function waitForTarget(task,tabId){
@@ -106,9 +106,10 @@ const _videoWorkflow=new VideoWorkflow({
  diagnostic:diagnoseTask,
  identify:VidSiftPlatforms.identify,toSrt:VidSiftPlatforms.toSrt,normalize:ScreenshotSettings.normalize,normalizeAudio:AudioSettings.normalize,
  getTab:id=>chrome.tabs.get(id),client:()=>new NativeMediaClient(),existing:_getActiveTranscribeTask,
+ resolveSource:async tab=>(await VidSiftCurrentVideo.discover(chrome,tab,{capture:false})).source,
  snapshot:async task=>{
   if(task.source.platform!=='douyin')return null;
-  const results=await chrome.scripting.executeScript({target:{tabId:task.tabId,frameIds:[0]},world:'MAIN',func:DouyinPageSource,args:[task.source.videoId]});
+  const results=await chrome.scripting.executeScript({target:{tabId:task.tabId,frameIds:[task.source.frameId||0]},world:'MAIN',func:DouyinPageSource,args:[task.source.videoId,{videoIndex:task.source.videoIndex,playerIdentity:true}]});
   return results[0]?.result||null;
  },
  lock:_setActiveTranscribeTask,unlock:_clearActiveTranscribeTask,
@@ -120,6 +121,7 @@ const _videoWorkflow=new VideoWorkflow({
  }
 });
 async function captureTaskSource(task){
+ if(task.admission)return task.admission;
  let source={...task.source},pageSource;
  try{
   const result=await chrome.scripting.executeScript({target:{tabId:task.tabId,frameIds:[0]},func:()=>({url:location.href,title:document.querySelector('h1')?.textContent||document.title,coverUrl:document.querySelector('meta[property="og:image"]')?.content||document.querySelector('video[poster]')?.poster||'',duration:document.querySelector('video')?.duration})});
@@ -136,7 +138,8 @@ async function prepareBilibiliSource(task,msg,captured){
  const view=await (await fetch('https://api.bilibili.com/x/web-interface/view?bvid='+encodeURIComponent(source.videoId),{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
  if(view.code!==0||!view.data?.aid||view.data.bvid!==source.videoId)throw new Error('B站视频信息读取失败：'+(view.message||view.code));
  if(source.part>1&&!view.data.pages?.[source.part-1]?.cid)throw new Error('未找到所选 B站分P，未发送其他分P的内容');
- const page=view.data.pages?.[source.part-1],cid=page?.cid||view.data.cid;
+ const page=source.cid?view.data.pages?.find(p=>Number(p.cid)===source.cid):view.data.pages?.[source.part-1],cid=page?.cid||view.data.cid;
+ if(source.cid&&Number(cid)!==source.cid)throw new Error('B站当前播放器分P与作品信息不一致，未发送其他分P的内容');
  const result={...captured.source,...source,title:view.data.title||captured.source.title||source.videoId,duration:page?.duration||view.data.duration,coverUrl:VidSiftVideoLibrary.normalizeCover(view.data.pic)||captured.source.coverUrl||'',subtitle:null,bili:{aid:view.data.aid,cid,pageUrl:source.url}};
  if(!msg.forceAudio){
   const player=await (await fetch(`https://api.bilibili.com/x/player/wbi/v2?aid=${view.data.aid}&cid=${cid}`,{credentials:'include',signal:AbortSignal.timeout(20000)})).json();
@@ -146,12 +149,20 @@ async function prepareBilibiliSource(task,msg,captured){
  return result;
 }
 async function startVideoSummary(msg,notify){
- const source=VidSiftPlatforms.identify(msg.sourceUrl);
+ let admission;
+ if(msg.clickedSource){
+  try{admission=await VidSiftCurrentVideo.discover(chrome,await chrome.tabs.get(msg.openerTabId));}
+  catch(error){if(!/No tab with id\b|标签页不存在|不存在的标签页/i.test(String(error?.message||error)))throw error;admission={source:msg.clickedSource,pageSource:msg.clickedPageSource};msg.sourceClosed=true;}
+  if(admission.source.key!==msg.clickedSource.key||admission.source.frameId!==msg.clickedSource.frameId)throw new Error('源视频已切换，请重新打开扩展后总结当前视频');
+  msg.sourceUrl=admission.source.url;
+ }
+ const source=admission?.source||VidSiftPlatforms.identify(msg.sourceUrl);
  if(!source)throw new Error('视频来源无效');
  const tabId=msg.openerTabId;
  if(_videoWorkflow.tasks.has(tabId)||_legacyGuard.get(tabId)||_getActiveTranscribeTask(tabId))throw new Error('当前视频已有总结任务，请等待或取消');
  // Metadata acquisition belongs to the worker, never to the popup or source page.
  const task=_legacyGuard.begin(tabId,msg.sourceUrl);task.diagnosticId=msg.diagnosticId;
+ if(admission){task.source={...source};task.admission={source:{...source},pageSource:admission.pageSource};task.sourceClosed=msg.sourceClosed===true;}
  diagnoseTask(task,'task.started');
  _setActiveTranscribeTask(tabId,'video','已接收视频，正在后台取得字幕...');
  const configuration=(async()=>{await DouyinLocalSettings.migrate(chrome.storage.local);return chrome.storage.local.get(['selfHostedApiUrl','selfHostedApiToken','transcribeService','localModel','localDevice','douyinLocalSettings','groqSettings']);})();
@@ -192,6 +203,10 @@ chrome.runtime.onConnect.addListener(port=>{
  });
 });
 chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
+ if(msg.type==='VIDSIFT_DISCOVER_SOURCE'){
+  if(sender.id!==chrome.runtime.id||sender.url!==chrome.runtime.getURL('popup.html')){sendResponse({ok:false});return false;}
+  (async()=>{try{const snapshot=await VidSiftCurrentVideo.discover(chrome,await chrome.tabs.get(msg.tabId));sendResponse({ok:true,snapshot});}catch(error){sendResponse({ok:false,error:error.message});}})();return true;
+ }
  if(['VIDSIFT_GROQ_KEY_READY','VIDSIFT_GROQ_KEY_SAVE'].includes(msg.type)){
   groqCredentialPrompt().handle(msg,sender).then(sendResponse,()=>sendResponse({ok:false,error:'密钥配置未完成，请重新打开配置窗口'}));return true;
  }
@@ -242,9 +257,8 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
 });
 chrome.tabs.onUpdated.addListener((id,change)=>{
  const legacy=_legacyGuard.get(id);
- if(legacy&&!legacy.sourceClosed&&change.url&&VidSiftPlatforms.identify(change.url)?.key!==legacy.source.key){
-  _legacyGuard.cancel(id);if(legacy.targetTabId)chrome.tabs.sendMessage(legacy.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:legacy.id}).catch(()=>{});
-  _targetCompletions.get(legacy.id)?.reject(new Error('源视频已切换，未发送旧视频内容'));
+ if(legacy&&!legacy.sourceClosed&&change.url){
+  _legacyGuard.check(legacy).catch(()=>{_legacyGuard.cancel(id);if(legacy.targetTabId)chrome.tabs.sendMessage(legacy.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:legacy.id}).catch(()=>{});_targetCompletions.get(legacy.id)?.reject(new Error('源视频已切换，未发送旧视频内容'));});
  }
  const task=_videoWorkflow.tasks.get(id);if(!task||!change.url)return;
  if(VidSiftPlatforms.identify(change.url)?.key!==task.source.key)verifySourceChange(task).catch(()=>{});

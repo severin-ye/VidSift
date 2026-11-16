@@ -25,6 +25,7 @@ try {
  $items+=@('groq-credential-prompt.js','groq-key.html','groq-key.js','groq-key.css')
  $items+=@('summary-verification.js','summary-verifier-content.js','summary-lookup.js','background-summary-reminder.js','summary-reminder.js')
  $items+=@('background-summary-popup.js','popup-summary.js')
+ $items+=@('current-video.js')
  foreach($item in $items){
   if(!(Test-Path -LiteralPath $item)){throw "Package input missing: $item"}
   Copy-Item -LiteralPath $item -Destination $stage -Recurse -Force

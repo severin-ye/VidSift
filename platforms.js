@@ -4,12 +4,12 @@
   let u;try{u=new URL(value);}catch{return null;}
   if(!['https:','http:'].includes(u.protocol))return null;
   const host=u.hostname.toLowerCase();let platform,id,part=1;
-  if(host==='www.bilibili.com'||host==='bilibili.com'){
+  if(host==='www.bilibili.com'||host==='bilibili.com'||host==='player.bilibili.com'){
    id=u.pathname.match(/^\/video\/(BV\w+)/)?.[1]||u.searchParams.get('bvid');
    if(!id||!/^BV\w+$/.test(id))return null;
    platform='bilibili';part=Math.max(1,parseInt(u.searchParams.get('p'),10)||1);
-  }else if(['www.youtube.com','youtube.com','m.youtube.com','youtu.be'].includes(host)){
-   id=host==='youtu.be'?u.pathname.split('/')[1]:u.searchParams.get('v')||u.pathname.match(/^\/(?:shorts|live)\/([^/]+)/)?.[1];
+  }else if(['www.youtube.com','youtube.com','m.youtube.com','youtu.be','www.youtube-nocookie.com','youtube-nocookie.com'].includes(host)){
+   id=host==='youtu.be'?u.pathname.split('/')[1]:u.searchParams.get('v')||u.pathname.match(/^\/(?:shorts|live|embed)\/([^/]+)/)?.[1];
    if(!/^[\w-]{11}$/.test(id||''))return null;platform='youtube';
   }else if(['www.douyin.com','douyin.com','v.douyin.com'].includes(host)){
    id=u.pathname.match(/\/video\/(\d+)/)?.[1]||u.searchParams.get('modal_id')||u.searchParams.get('aweme_id');

@@ -1,5 +1,9 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {SourceGuard}=require('../source-guard');const P=require('../platforms');
+test('feed identity is checked even when URL remains unchanged, closed queued snapshot stays fixed',async()=>{
+ let current='111',reads=0;const guard=new SourceGuard(async()=>({url:'https://www.douyin.com/follow'}),P.identify,async()=>{reads++;return {key:'douyin:'+current,frameId:0};}),task=guard.begin(7,'https://www.douyin.com/video/111');Object.assign(task.source,{frameUrl:'https://www.douyin.com/follow',frameId:0});
+ await guard.check(task);current='222';await assert.rejects(guard.check(task),/切换/);task.sourceClosed=true;await guard.check(task);assert.equal(reads,2);assert.equal(task.source.videoId,'111');guard.cancel(7);await assert.rejects(guard.check(task),/取消/);
+});
 test('legacy Bili pending transcription cannot send after BV or part changes',async()=>{
  let url='https://www.bilibili.com/video/BV123abc?p=1',sent=0;
  const guard=new SourceGuard(async()=>({url}),P.identify),task=guard.begin(7,url);

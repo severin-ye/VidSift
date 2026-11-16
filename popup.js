@@ -12,6 +12,7 @@ let statusTabId = null;
 let viewingTaskTarget = false;
 let currentPlatform = 'bilibili';
 let sourceTabSnapshot = null;
+let sourceDiscoverySnapshot = null;
 let screenshotSettings = ScreenshotSettings.normalize();
 let audioSettings = AudioSettings.normalize();
 const screenshotCheckbox = document.getElementById('screenshotCheckbox');
@@ -275,7 +276,7 @@ async function run() {
     // The source was identified before enabling the button. Submit the click
     // synchronously rather than depending on another popup-owned API callback.
     const tab=sourceTabSnapshot;
-    const source=VidSiftPlatforms.identify(tab?.url);
+    const source=sourceDiscoverySnapshot?.source||VidSiftPlatforms.identify(tab?.url);
     if(!source)throw new Error('请在 B站、YouTube 或抖音视频页面使用此扩展。');
     popupDiagnostic(diagnosticId,'popup.clicked',{},tab.id,tab.url);
     if(transcribeService==='local'&&source.platform!=='douyin'){
@@ -294,7 +295,7 @@ async function run() {
     });
     port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看后台任务状态');}});
     // Transfer the click snapshot before metadata, subtitles or media are fetched.
-    port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:tab.url,source,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings});
+    port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:source.url,source,clickedSource:sourceDiscoverySnapshot?.source,clickedPageSource:sourceDiscoverySnapshot?.pageSource,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings});
     runBtn.disabled=true;
     setStatus('正在交给后台接收...');
   } catch(e) {
@@ -329,17 +330,21 @@ runBtn.addEventListener('click', run);
     sourceTabSnapshot=tab;
     const pageUrl = tab.url || '';
     popupDiagnostic(popupDiagnosticId,'popup.source',{},tab.id,pageUrl);
-    currentPlatform=VidSiftPlatforms.identify(pageUrl)?.platform || '';
+    let discoveryError='';
+    const discovered=await chrome.runtime.sendMessage({type:'VIDSIFT_DISCOVER_SOURCE',tabId:tab.id});
+    if(discovered?.ok)sourceDiscoverySnapshot=discovered.snapshot;
+    else discoveryError=discovered?.error||'';
+    currentPlatform=sourceDiscoverySnapshot?.source?.platform || '';
     if(currentPlatform){
       const selected=DouyinLocalSettings.resolve(currentPlatform,storageResult);
       transcribeService=selected.service;localModel=selected.model;localDevice=selected.device;douyinLocalSettings=selected.settings;groqSettings=selected.groq;updateUI();
     }
     const taskStatus = await getActiveTranscribeTask(tab.id);
-    if (!VidSiftPlatforms.identify(pageUrl)) {
+    if (!sourceDiscoverySnapshot) {
       viewingTaskTarget=true;
       if(taskStatus.sourceTabId!==tab.id){
         if(!applyActiveTranscribeTask(taskStatus)){runBtn.textContent='视频任务已结束';setStatus(taskStatus.statusText||'视频任务已结束');}
-      }else{runBtn.textContent='请从视频页开始';setStatus('请在 B站、YouTube 或抖音视频页面使用');}
+      }else{runBtn.textContent='请从视频页开始';setStatus(discoveryError||'请在 B站、YouTube 或抖音视频页面使用');}
       runBtn.disabled=true;return;
     }
     activeTranscribeTask = taskStatus.active ? taskStatus : null;
@@ -350,7 +355,7 @@ runBtn.addEventListener('click', run);
     }
 
     try {
-      cachedVideoInfo = await fetchVideoInfo(pageUrl);
+      cachedVideoInfo = await fetchVideoInfo(sourceDiscoverySnapshot.source.url);
       const subtitle = await fetchSubtitle(cachedVideoInfo.bvid, cachedVideoInfo.aid, cachedVideoInfo.cid);
       cachedHasSubtitle = !!subtitle;
       updateUI();

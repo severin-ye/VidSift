@@ -1,12 +1,12 @@
 'use strict';
-importScripts('task-diagnostics.js','audio-settings.js','douyin-local-settings.js','local-transcription.js','local-media-cache.js','attachment-transfer.js','platforms.js','native-client.js','groq-credential-prompt.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js','background-summary-popup.js');
+importScripts('task-diagnostics.js','audio-settings.js','douyin-local-settings.js','local-transcription.js','local-media-cache.js','attachment-transfer.js','platforms.js','current-video.js','native-client.js','groq-credential-prompt.js','screenshot-settings.js','video-workflow.js','source-guard.js','page-bridge.js','douyin-source.js','video-library.js','background-library.js','background-summary-popup.js');
 
 const _diagnostics=VidSiftDiagnostics.create(chrome.storage?.local,{version:chrome.runtime.getManifest?.().version||'unknown'});
 importScripts('background-errors.js');
 importScripts('summary-lookup.js','background-summary-reminder.js');
 function diagnoseTask(task,stage,details={}){try{if(stage==='task.started')_diagnostics.begin(task.id,{sourceTabId:task.tabId,platform:task.source.platform,videoId:task.source.videoId},task.diagnosticId);return _diagnostics.record(task.id,stage,details);}catch{return Promise.resolve(false);}}
 
-const _legacyGuard = new SourceGuard(id=>chrome.tabs.get(id), VidSiftPlatforms.identify);
+const _legacyGuard = new SourceGuard(id=>chrome.tabs.get(id), VidSiftPlatforms.identify, async tab=>(await VidSiftCurrentVideo.discover(chrome,tab,{capture:false})).source);
 const _pageBridge = new PageBridge(chrome);
 
 // Resolve the current index and windowId of a tab by its stable ID.
