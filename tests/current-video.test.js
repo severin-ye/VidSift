@@ -53,3 +53,13 @@ test('script permission failures cannot fall back to an unverified route identit
  const c=context('https://www.youtube.com/watch?v=abc123XYZ_0');c.VidSiftPlatforms=P;
  await assert.rejects(c.VidSiftCurrentVideo.discover({scripting:{executeScript:async()=>{throw Error('permission denied');}}},{id:1,url:c.location.href}),/权限/);
 });
+
+test('unrelated Douyin AI sidebar iframe does not hide the exact modal route when background video has no visible box',async()=>{
+ const url='https://www.douyin.com/jingxuan/knowledge/search/test?modal_id=7690785624487590054',sidebar='https://so-landing.douyin.com/search_ai_mobile/pc';
+ const c=context(url);c.VidSiftPlatforms=P;
+ const top={...P.identify(url),pageUrl:url,frames:[sidebar],visiblePlayers:0,videoIndex:-1};
+ const chrome={scripting:{executeScript:async()=>[{frameId:0,result:top},{frameId:8,result:{platform:null,url:sidebar}}]}};
+ const result=await c.VidSiftCurrentVideo.discover(chrome,{id:1,url},{capture:false});assert.equal(result.source.videoId,'7690785624487590054');assert.equal(result.source.frameId,0);
+ top.frames=['https://www.youtube.com/'];chrome.scripting.executeScript=async()=>[{frameId:0,result:top},{frameId:8,result:{platform:'youtube',url:top.frames[0],frames:[],visiblePlayers:0}}];
+ await assert.rejects(c.VidSiftCurrentVideo.discover(chrome,{id:1,url},{capture:false}),/播放器/);
+});

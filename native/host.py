@@ -495,6 +495,103 @@ def groq_settings(request):
     return model, timeout
 
 
+SPEECH_MODEL_SHA256 = '4cbf549b8326f60f80f2536d9eefeb450a9abe83365a098031c89719f1be17d2'
+SPEECH_MODEL_URL = 'https://raw.githubusercontent.com/SYSTRAN/faster-whisper/v1.2.1/faster_whisper/assets/silero_vad_v6.onnx'
+
+
+def speech_model_path(root=None):
+    import hashlib
+    import importlib.util
+    import requests
+    directory = (root or ROOT) / 'runtime' / 'models' / 'vad'
+    reference = directory / 'silero-v6-reference.json'
+    target = directory / ('silero-v6-' + SPEECH_MODEL_SHA256 + '.onnx')
+    candidates = [target]
+    try: candidates.append(Path(json.loads(reference.read_text(encoding='utf-8'))['path']))
+    except (OSError, ValueError, KeyError, TypeError): pass
+    try:
+        spec = importlib.util.find_spec('faster_whisper')
+        if spec and spec.origin: candidates.append(Path(spec.origin).parent / 'assets' / 'silero_vad_v6.onnx')
+    except (ImportError, ValueError): pass
+    def valid(path):
+        return path.is_file() and path.stat().st_size == 1245151 and hashlib.sha256(path.read_bytes()).hexdigest() == SPEECH_MODEL_SHA256
+    directory.mkdir(parents=True, exist_ok=True)
+    for path in candidates:
+        if valid(path):
+            reference.write_text(json.dumps({'path': str(path), 'sha256': SPEECH_MODEL_SHA256}), encoding='utf-8')
+            return path
+    temporary = directory / (uuid.uuid4().hex + '.part')
+    try:
+        with requests.get(SPEECH_MODEL_URL, timeout=(15, 45), stream=True) as response:
+            response.raise_for_status()
+            with temporary.open('wb') as output:
+                count = 0
+                for block in response.iter_content(65536):
+                    count += len(block)
+                    if count > 1245151: raise ValueError('人声检测模型大小不符')
+                    output.write(block)
+        if not valid(temporary): raise ValueError('人声检测模型校验失败')
+        temporary.replace(target)
+        return target
+    except Exception:
+        raise ValueError('人声检测模型不可用，已停止发送；请检查网络并更新本机程序后重试') from None
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def has_reliable_speech(path, duration):
+    # Silero v6 ONNX encoder, from faster-whisper v1.2.1 (MIT); no ASR or torch.
+    import numpy as np
+    import onnxruntime as ort
+    import tempfile
+    options = ort.SessionOptions()
+    options.inter_op_num_threads = options.intra_op_num_threads = 1
+    options.enable_cpu_mem_arena = False
+    session = ort.InferenceSession(str(speech_model_path()), sess_options=options, providers=['CPUExecutionProvider'])
+    h = np.zeros((1, 1, 128), dtype=np.float32)
+    c = h.copy()
+    context = np.zeros(64, dtype=np.float32)
+    samples = 0
+    active = quiet = 0
+    speech = False
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg: raise ValueError('人声检测需要 FFmpeg，请更新本机程序')
+    with tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen([ffmpeg, '-nostdin', '-v', 'error', '-i', str(path), '-map', '0:a:0', '-vn', '-ac', '1', '-ar', '16000', '-f', 'f32le', 'pipe:1'], stdout=subprocess.PIPE, stderr=errors, **({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}))
+        try:
+            while True:
+                raw = process.stdout.read(65536)
+                if not raw: break
+                if len(raw) % 4: raise ValueError('人声检测音频解码失败')
+                audio = np.frombuffer(raw, dtype='<f4')
+                samples += len(audio)
+                if samples > (duration + 3) * 16000: raise ValueError('人声检测音频时长不符')
+                if not np.isfinite(audio).all(): raise ValueError('人声检测音频解码无效')
+                audio = np.pad(audio, (0, (-len(audio)) % 512)).reshape(-1, 512)
+                previous = np.concatenate([context[None, :], audio[:-1, -64:]], axis=0)
+                inputs = np.concatenate([previous, audio], axis=1)
+                context = audio[-1, -64:].copy()
+                probabilities, h, c = session.run(None, {'input':inputs, 'h':h, 'c':c})
+                probabilities = np.asarray(probabilities).reshape(-1)
+                if len(probabilities) != len(audio) or not np.isfinite(probabilities).all() or ((probabilities < 0) | (probabilities > 1)).any():
+                    raise ValueError('人声检测模型输出无效，已停止发送')
+                for value in probabilities:
+                    if value >= .5:
+                        active += 512; quiet = 0
+                    elif active and value >= .35:
+                        active += 512; quiet = 0
+                    elif active:
+                        quiet += 512
+                        if quiet >= 1600: active = quiet = 0
+                    if active >= 4000: speech = True
+            if process.wait(timeout=30) != 0 or abs(samples / 16000 - duration) > max(3, duration * .002):
+                raise ValueError('人声检测音频解码失败或完整时长不符，已停止发送')
+        finally:
+            process.stdout.close()
+            if process.poll() is None: process.kill(); process.wait(timeout=10)
+    return speech
+
+
 def groq_result(payload, duration, model):
     if not isinstance(payload, dict) or not positive_number(payload.get('duration')) or abs(payload['duration'] - duration) > max(3, duration * .002):
         raise ValueError('Groq 返回时长与完整音频不符')
@@ -999,7 +1096,7 @@ def diagnostics():
             versions[key] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
             versions[key] = None
-    return {'version': '5.11.3', 'ffmpeg': bool(find_ffmpeg()), **versions}
+    return {'version': '5.14.0', 'capabilities':['speech-vad-v1'], 'ffmpeg': bool(find_ffmpeg()), **versions}
 
 
 def normalize_audio_settings(value=None):
@@ -1062,9 +1159,38 @@ def groq_compression_bitrate(duration):
 
 
 class Service:
+    def detect_speech(self, request, job, progress):
+        job.check()
+        fingerprint = request.get('fingerprint')
+        pin = self.local_audio.pin_window(fingerprint)
+        try:
+            path, entry = self.local_audio.lookup(fingerprint)
+            if entry['videoId'] != request.get('videoId') or entry.get('platform', 'douyin') != request.get('platform', 'douyin'):
+                raise ValueError('人声检测音频作品或平台不匹配')
+            self.local_audio._verify(entry)
+            if fingerprint in self.speech_status: return self.speech_status[fingerprint]
+            progress('正在本机检查完整音轨中的可靠人声')
+            output, _ = job.run([sys.executable, str(Path(__file__).resolve()), '--speech-worker', str(path), str(entry['duration'])], timeout=max(90, min(300, 60 + entry['duration'] * .1)))
+            job.check()
+            try: reply = json.loads(output)
+            except ValueError: raise ValueError('本机人声检测响应无效') from None
+            if reply.get('error'): raise ValueError(reply['error'])
+            result = reply.get('result')
+            if not isinstance(result, dict) or result.get('speechStatus') not in ('present', 'none'):
+                raise ValueError('本机人声检测状态尚未确认，已停止发送')
+            result['inputBytes'] = path.stat().st_size
+            self.speech_status[fingerprint] = result
+            if len(self.speech_status) > 20: del self.speech_status[next(iter(self.speech_status))]
+            return result
+        finally:
+            self.local_audio.unpin_window(fingerprint, pin)
+
     def transcribe_groq(self, request, job, progress):
         job.check()
         model, timeout = groq_settings(request)
+        speech = self.detect_speech(request, job, progress)
+        if speech['speechStatus'] == 'none':
+            return {'srt':'', 'speechStatus':'none', 'duration':speech.get('duration'), 'model':model, 'segmentCount':0, 'inputBytes':speech.get('inputBytes', 0), 'uploadedBytes':0}
         fingerprint = request.get('fingerprint')
         cache, pin, temporary = self.local_audio, None, None
         started = time.monotonic()
@@ -1087,7 +1213,7 @@ class Service:
                 path = temporary
             uploaded_bytes = path.stat().st_size
             if not 0 < uploaded_bytes <= GROQ_UPLOAD_LIMIT: raise ValueError('Groq 压缩后仍超过 24 MB，未上传且未截断音频；请缩短音频')
-            progress('正在向 Groq 上传完整音频并等待转写')
+            progress('正在检查完整音轨中的人声并准备 Groq 转写')
             # Isolated process owns the socket; cancellation kills it promptly.
             # This discards local late results, but cannot promise server cancellation.
             output, _ = job.run([sys.executable, str(Path(__file__).resolve()), '--groq-worker', str(path), str(entry['duration']), model, str(timeout)], timeout=timeout + 15)
@@ -1096,6 +1222,7 @@ class Service:
             except ValueError: raise ValueError('Groq 本地工作进程响应无效') from None
             if reply.get('error'): raise ValueError(reply['error'])
             result = reply['result']
+            result['speechStatus'] = 'present'
             result.update(elapsedMs=round((time.monotonic()-started)*1000), inputBytes=input_bytes, uploadedBytes=uploaded_bytes)
             return result
         finally:
@@ -1105,6 +1232,7 @@ class Service:
     def __init__(self, root=None):
         self.store = AssetStore(root or ROOT / 'cache')
         self.local_audio = LocalAudioCache(self.store.root, uuid.uuid4().hex)
+        self.speech_status = {}
 
     def ytdlp(self, url, task, job, args):
         command = [sys.executable, '-m', 'yt_dlp', '--no-playlist', '--no-warnings', '--socket-timeout', '25', '--retries', '1', '--no-progress', '--no-cache-dir']
@@ -1583,6 +1711,8 @@ class Host:
             action = request.get('action')
             if action == 'resolve':
                 result = self.service.resolve(request, job, progress)
+            elif action == 'detect_speech':
+                result = self.service.detect_speech(request, job, progress)
             elif action == 'transcribe_groq':
                 result = self.service.transcribe_groq(request, job, progress)
             elif action == 'groq_store_key':
@@ -1668,7 +1798,7 @@ class Host:
             self.emit({'id': task_id, 'type': 'result', 'result': diagnostics()})
         elif action == 'groq_status':
             self.emit({'id': task_id, 'type': 'result', 'result': {'configured':bool(groq_key())}})
-        elif action in ('resolve', 'prepare_local_audio', 'local_audio_finish', 'read_pcm_window', 'model_file_info', 'model_file_chunk', 'transcribe_groq', 'groq_store_key'):
+        elif action in ('resolve', 'prepare_local_audio', 'local_audio_finish', 'read_pcm_window', 'model_file_info', 'model_file_chunk', 'transcribe_groq', 'groq_store_key', 'detect_speech'):
             with self.lock:
                 if task_id in self.jobs or len(self.jobs) >= 2:
                     raise ValueError('任务编号已在使用，或本地任务数量已达上限')
@@ -1722,6 +1852,17 @@ class Host:
 
 def main():
     args = sys.argv[1:]
+    if args and args[0] == '--speech-worker':
+        try:
+            if len(args) != 3: raise ValueError('人声检测工作参数无效')
+            duration = float(args[2])
+            if not positive_number(duration) or duration > 7200: raise ValueError('人声检测时长无效')
+            result = {'speechStatus':'present' if has_reliable_speech(Path(args[1]), duration) else 'none', 'duration':duration}
+            reply = {'result':result}
+        except ValueError as error: reply = {'error':str(error)}
+        except Exception: reply = {'error':'人声检测不可用，已停止发送；请更新本机程序后重试'}
+        sys.stdout.buffer.write(json.dumps(reply, ensure_ascii=False).encode('utf-8'))
+        return 0
     if args and args[0] == '--groq-worker':
         try:
             if len(args) != 5: raise ValueError('Groq 工作参数无效')

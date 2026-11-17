@@ -9,6 +9,10 @@ from native import host
 
 
 class GroqPlatformTests(unittest.TestCase):
+    def setUp(self):
+        detector=patch.object(host.Service,'detect_speech',return_value={'speechStatus':'present'})
+        detector.start();self.addCleanup(detector.stop)
+
     platforms = [('bilibili', 'BV1abc123456', 'https://www.bilibili.com/video/BV1abc123456'),
                  ('youtube', 'abcdefghijk', 'https://www.youtube.com/watch?v=abcdefghijk'),
                  ('douyin', '123', 'https://www.douyin.com/video/123')]

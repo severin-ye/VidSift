@@ -34,3 +34,10 @@ test('waiting for a pending title never PATCHes or sends the summary again',asyn
   assert.equal(await context.renameConversationViaAPI('owned-conversation','video title'),false);
   assert.deepEqual(writes,[]);
 });
+
+test('generation cancellation after submission reports the already sent summary',()=>{
+ const context=vm.createContext({cancelledTasks:new Set(['task']),_lastConversationTask:{taskId:'task',submitted:true}});
+ const body=source.match(/  function assertNotCancelled\(taskId\) \{[^\n]+/)[0];vm.runInContext(body,context);
+ assert.throws(()=>context.assertNotCancelled('task'),/总结已发送/);
+ context._lastConversationTask.submitted=false;assert.throws(()=>context.assertNotCancelled('task'),/未自动发送/);
+});

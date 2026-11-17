@@ -14,7 +14,8 @@
     // A source identity is more useful than an empty headline or metadata alone.
     if(!title)title=String(source.videoId||'').trim();
     if(!title)return '';
-    return (label?'【'+label+'】':'')+title;
+    // ChatGPT validates at most 128 Unicode characters, including the prefix.
+    return Array.from((label?'【'+label+'】':'')+title).slice(0,128).join('');
   }
   root.VidSiftConversationTitle={formatConversationTitle};
   if(typeof module!=='undefined')module.exports=root.VidSiftConversationTitle;

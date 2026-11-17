@@ -49,10 +49,12 @@
   const reachable=results.filter(r=>r.frameId===0||visibleFrames.has(r.result?.pageUrl||r.result?.url));
   const ambiguous=reachable.find(r=>r.result?.error&&r.result?.visiblePlayers!==0);
   if(ambiguous)throw new Error(ambiguous.result.error);
-  const candidates=reachable.filter(r=>r.result?.videoId&&(r.result.visiblePlayers>0||r.frameId===0&&!top?.frames?.length));
+  // Unrelated sidebars/ads are not competing supported video players.
+  const hasPlayerFrames=reachable.some(r=>r.frameId!==0&&r.result?.platform);
+  const candidates=reachable.filter(r=>r.result?.videoId&&(r.result.visiblePlayers>0||r.frameId===0&&!hasPlayerFrames));
   if(candidates.length>1)throw new Error('页面有多个可见播放器，请只保留要总结的视频播放后重试');
   let selected=candidates[0];
-  if(!selected&&route&&!top?.visiblePlayers&&!top?.frames?.length)selected={frameId:0,result:{...route,pageUrl:tab.url,videoIndex:-1}};
+  if(!selected&&route&&!top?.visiblePlayers&&!hasPlayerFrames)selected={frameId:0,result:{...route,pageUrl:tab.url,videoIndex:-1}};
   if(!selected)throw new Error(top?.error||'当前页面没有可确认的 B站、YouTube 或抖音播放器');
   const {frames,visiblePlayers,playing,error,...metadata}=selected.result;
   if(metadata.isLive)throw new Error('暂不支持直播或尚未开始的视频，请使用已发布的完整视频');

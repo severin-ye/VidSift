@@ -145,3 +145,12 @@ test('Groq terminal failure is retained after workflow and summary queue release
  assert.equal(state.queuePosition,undefined);assert.equal(vm.runInContext('_summaryQueue.length',f.context),0);
  assert.equal(notes.at(-1).type,'ERROR');assert.equal(f.created.length,0);
 });
+
+test('source cancellation after accepted submission never claims the summary was not sent',async()=>{
+ const f=fixture();f.context.chrome.tabs.get=async id=>({id,url:'https://www.douyin.com/video/222'});
+ vm.runInContext(`globalThis.modern={id:'submitted',tabId:7,source:VidSiftPlatforms.identify('https://www.douyin.com/video/111'),controller:new AbortController(),cancelled:false};_videoWorkflow.tasks.set(7,modern);globalThis.cancelledResult=waitForTarget(modern,20).catch(e=>e.message);`,f.context);
+ assert.equal((await f.dispatch({type:'VIDSIFT_TARGET_SENT',taskId:'submitted'},{tab:{id:999}})).ok,false);
+ assert.equal((await f.dispatch({type:'VIDSIFT_TARGET_SENT',taskId:'submitted'},{tab:{id:20}})).ok,true);
+ await f.dispatch({type:'VIDSIFT_SOURCE_CHANGED',url:'https://www.douyin.com/video/222'},{tab:{id:7}});
+ const message=await vm.runInContext('cancelledResult',f.context);assert.match(message,/总结已发送/);assert.doesNotMatch(message,/未.*发送/);assert.equal(vm.runInContext('modern.cancelled',f.context),true);
+});

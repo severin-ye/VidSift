@@ -45,3 +45,9 @@ test('actual legacy handler labels Bilibili while temp and unconfirmed chats nev
  const legacy=await run({bvid:'BV123abc',title:'B站原题 #话题'});assert.equal(legacy.renames[0].title,'【B站】B站原题');assert.equal(legacy.sent,1);
  for(const options of [{tempChat:true},{id:null}]){const result=await run({...options,source:{platform:'douyin'}});assert.equal(result.sent,1);assert.equal(result.renames.length,0);}
 });
+
+test('ChatGPT title respects the server 128 Unicode character limit without changing source metadata',()=>{
+ const raw='数学原题。'.repeat(40),source={platform:'douyin',videoId:'123',title:raw};
+ const title=format(raw,source);assert.equal(Array.from(title).length,128);assert(title.startsWith('【抖音】数学原题。'));assert.equal(source.title,raw);
+ const emoji=format('🧮'.repeat(140),{platform:'douyin'});assert.equal(Array.from(emoji).length,128);assert.equal(emoji,'【抖音】'+'🧮'.repeat(124));assert.equal(format(emoji,{platform:'douyin'}),emoji);
+});

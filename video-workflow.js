@@ -28,7 +28,7 @@
    const status=(type,text)=>{if(this.tasks.get(tabId)===task)d.lock(tabId,'video',text);notify(type,text);};let assets=[],localAudio,localOutcome='failed';
    try{
     await this.assertLive(task);log('source.checked');task.client=d.client();log('native.connected');
-    if(typeof task.client.request==='function'){try{const reply=await task.client.request('diagnostics');log('native.version',{nativeVersion:reply.result?.version||'unknown'});}catch{log('native.diagnostics_failed');}}
+    if(typeof task.client.request==='function'){try{const reply=await task.client.request('diagnostics');task.nativeCapabilities=reply.result?.capabilities||[];log('native.version',{nativeVersion:reply.result?.version||'unknown'});}catch{log('native.diagnostics_failed');}}
     let pageSource=msg.pageSource;
     if(pageSource&&String(pageSource.videoId)!==source.videoId)throw new Error('已采集作品与点击的视频不一致，未发送内容');
     if(source.platform==='douyin'&&!pageSource&&d.snapshot&&!task.sourceClosed){
@@ -58,6 +58,7 @@
     const context={platform:result.platform||source.platform,videoId:result.videoId,title:result.title||msg.source?.title||source.videoId,url:msg.sourceUrl,duration:result.duration,coverUrl:result.coverUrl||pageSource?.coverUrl||msg.source?.coverUrl||''};
     const attachments=[];
     for(const image of result.images||[]){await this.assertLive(task);attachments.push(await task.client.readAsset(image.assetId));}
+    let visualOnly=false;
     let srt=msg.forceAudio?'':result.subtitle?.body?.length?d.toSrt(result.subtitle.body):'';
     const common={...msg,taskId:task.id,biliTabId:tabId,videoTitle:context.title,bvid:context.videoId,source:context,localAudio,task};
     if(!srt){
@@ -66,8 +67,12 @@
       if(!localAudio)throw new Error('本机媒体程序不支持当前音轨转写，请更新本包本机程序');
       if(msg.transcribeService==='local'&&typeof task.client.readPcmWindow!=='function')throw new Error('本机媒体程序不支持分段本地转写，请更新本包本机程序');
       log(msg.transcribeService==='groq'?'groq.prepare':'local.start',{duration:result.duration});
-      srt=await d.transcribe(null,common,status,task.controller.signal);
-      if(!srt?.trim())throw new Error('音轨转写没有取得有效口播文字，未发送到 ChatGPT');
+      const transcription=await d.transcribe(null,common,status,task.controller.signal);
+      if(transcription?.speechStatus==='none'){
+       if(!d.normalize(msg.screenshotSettings).enabled||!attachments.some(a=>a.mime==='image/jpeg'))throw new Error('当前视频未检测到可靠人声，已停止发送；如需总结画面文字，请手动将“图片提取·开”后重试');
+       visualOnly=true;srt='';status('STATUS','未检测到可靠人声；本次仅按已开启的图片提取总结画面，不使用转写猜测');
+      }else srt=transcription;
+      if(!visualOnly&&!srt?.trim())throw new Error('音轨转写没有取得有效口播文字，未发送到 ChatGPT');
      }else{
       status('STATUS','正在读取视频音频...');const audio=await task.client.readAsset(result.audio.assetId);await this.assertLive(task);
       if((msg.transcribeService||'aistudio')==='aistudio'){
@@ -82,12 +87,12 @@
       }
      }
     }
-    if(srt){
+    if(srt||visualOnly){
      log('chatgpt.start');
      await this.assertLive(task);
      const name=(context.videoId+'_'+context.title).replace(/[\\/:*?"<>|]/g,'_').slice(0,160)+'.srt';
-     const file={name,content:srt};
-     await d.sendChatGPT({...common,file,attachments:[{name,mime:'text/plain',content:srt},...attachments]});
+     const file=visualOnly?{name:context.videoId+'_material.txt',content:'本次完整视频未检测到可靠人声，没有逐字稿。请仅依据所附带时间标记的原视频画面及画面文字总结；不要把视频简介、外部资料或任何转写猜测当作视频原文。画面不清或信息不足时明确说明，不补造缺失内容。'}:{name,content:srt};
+     await d.sendChatGPT({...common,file,attachments:[{...file,mime:'text/plain'},...attachments]});
     }
     if(task.cancelled||this.tasks.get(tabId)!==task)throw new Error('视频处理已取消或被替代');
     localOutcome='success';log('task.completed');status('DONE','总结请求已发送给 ChatGPT。');return {ok:true,source:context,frameInfo:result.frameInfo};

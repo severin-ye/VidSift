@@ -13,6 +13,8 @@
 
 ## 升级与并存
 
+- 5.14.0 必须同步更新本机程序，Groq 上传前增加本地人声检测；保留现有密钥、音轨、模型、提示词和图片提取开关。Native 新增 CPU ONNX Runtime 与 NumPy，Silero v6 模型按固定来源及 SHA-256 校验；同版本已验证资产优先引用，缺失时下载约1.25MB到共享 runtime/models/vad，后续升级复用。检测或模型准备失败时停止发送，不绕过检测。
+
 - 先把ZIP解压到固定目录，例如 `%LOCALAPPDATA%\VidSift\extension`；不要从临时解压目录加载。
 - 在Chrome的 `chrome://extensions` 或Edge的 `edge://extensions` 中，按浏览器提供的开发者加载流程选择“加载已解压的扩展程序”，选择包含 `manifest.json` 的目录；需要的浏览器权限由用户在界面确认。
 - 核对名称知行视频总结、版本与所下载发布包一致、ID `kggdkncbamdlhhihfkeldbbkppkgihad`；原扩展可以保留，不需要卸载、关闭或替换。

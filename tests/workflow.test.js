@@ -165,3 +165,18 @@ test('all three platforms send full native descriptors to Groq and never fall ba
   await assert.rejects(failed.workflow.start({openerTabId:1,sourceUrl:url,transcribeService:'groq'}),/Groq限流/);assert.equal(aiCalls,0);assert.equal(failed.sent.length,0);
  }
 });
+
+test('no speech respects pictures off, while pictures on sends only visual evidence and an explicit material note',async()=>{
+ for(const enabled of [false,true]){
+  const result={platform:'douyin',videoId:'111',duration:143,localAudio:{fingerprint:'a'.repeat(64)},images:enabled?[{assetId:'img'}]:[]},f=fixture(result);
+  f.deps.getTab=async()=>({url:'https://www.douyin.com/video/111'});f.deps.transcribe=async()=>({srt:'',speechStatus:'none'});
+  const run=f.workflow.start({openerTabId:1,sourceUrl:'https://www.douyin.com/video/111',transcribeService:'groq',screenshotSettings:{enabled}});
+  if(!enabled){await assert.rejects(run,/图片提取·开/);assert.equal(f.sent.length,0);}
+  else{await new Promise(setImmediate);assert.equal(f.sent.length,1);assert.equal(f.sent[0].file.name,'111_material.txt');assert.match(f.sent[0].file.content,/未检测到可靠人声/);assert.equal(f.sent[0].attachments.filter(a=>a.mime==='image/jpeg').length,1);assert(!f.sent[0].attachments.some(a=>a.name.endsWith('.srt')));f.complete();await run;}
+ }
+});
+
+test('pictures enabled but no usable image cannot send a visual-only material note',async()=>{
+ const f=fixture({platform:'douyin',videoId:'111',duration:143,localAudio:{},images:[]});f.deps.getTab=async()=>({url:'https://www.douyin.com/video/111'});f.deps.transcribe=async()=>({srt:'',speechStatus:'none'});
+ await assert.rejects(f.workflow.start({openerTabId:1,sourceUrl:'https://www.douyin.com/video/111',transcribeService:'groq',screenshotSettings:{enabled:true}}),/图片提取未得到可用画面/);assert.equal(f.sent.length,0);
+});

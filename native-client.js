@@ -40,6 +40,9 @@
   async resolve(data,progress){const {result}=await this.request('resolve',data,progress);return result;}
   async groqStatus(){const {result}=await this.request('groq_status');return result;}
   async storeGroqKey(apiKey){const {result}=await this.request('groq_store_key',{apiKey});return result;}
+  async detectSpeech(descriptor,onProgress){
+   const {result}=await this.request('detect_speech',{fingerprint:descriptor?.fingerprint,videoId:descriptor?.videoId,platform:descriptor?.platform||'douyin'},onProgress);return result;
+  }
   async transcribeGroq(descriptor,settings={},onProgress){
    const {result}=await this.request('transcribe_groq',{fingerprint:descriptor?.fingerprint,videoId:descriptor?.videoId,platform:descriptor?.platform||'douyin',model:settings.model||'whisper-large-v3-turbo',timeoutSeconds:settings.timeoutSeconds??180},onProgress);return result;
   }

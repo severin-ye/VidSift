@@ -7,7 +7,7 @@
   let _taskActive = false;
   let _lastConversationTask = null;
   const cancelledTasks = new Set();
-  function assertNotCancelled(taskId) { if (taskId && cancelledTasks.has(taskId)) throw new Error('任务已取消，未自动发送'); }
+  function assertNotCancelled(taskId) { if (taskId && cancelledTasks.has(taskId)) throw new Error(_lastConversationTask?.taskId===taskId&&_lastConversationTask.submitted?'总结已发送；扩展已停止后续处理，请查看原 ChatGPT 对话，不要重复提交':'任务已取消，未自动发送'); }
   function reportTarget(msg, ok, error) { if (msg.taskId) chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok,...(error?{error}:{})}).catch(() => {}); }
   function readComposerText(editor = findTextarea()) {
     return editor?.value ?? editor?.innerText ?? editor?.textContent ?? '';
@@ -943,6 +943,7 @@
             }
           });
           submitted=true;
+          _lastConversationTask.submitted=true;
           if(msg.awaitGeneration)chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_SENT',taskId:msg.taskId}).catch(()=>{});
           if(msg.awaitGeneration){
             generation=waitForSummaryGeneration(msg,libraryBinding,temporaryFinished).then(()=>reportTarget(msg,true),error=>{showError(error.message);reportTarget(msg,false,error.message);});

@@ -61,16 +61,32 @@ let _localMediaCache;
 let _groqCredentialPrompt;
 function groqCredentialPrompt(){return _groqCredentialPrompt??=new GroqCredentialPrompt(chrome);}
 async function transcribeVideo(audio,data,notify,signal){
+ if(data.localAudio){
+  if(!data.task.nativeCapabilities?.includes('speech-vad-v1')||typeof data.task.client.detectSpeech!=='function')throw new Error('本机程序缺少可靠人声检测，请更新到本包5.14.0本机程序后重试；未上传或发送');
+  await _videoWorkflow.assertLive(data.task);
+  const speech=await data.task.client.detectSpeech(data.localAudio,text=>notify('STATUS',text));
+  if(signal.aborted||data.task.cancelled)throw new Error('视频处理已取消');
+  if(speech?.speechStatus==='none'){diagnoseTask(data.task,'audio.no_speech');return {srt:'',speechStatus:'none'};}
+  if(speech?.speechStatus!=='present')throw new Error('本机人声检测状态尚未确认，已停止发送');
+ }
  if(data.transcribeService==='groq'){
   if(!data.localAudio||typeof data.task.client.transcribeGroq!=='function')throw new Error('本机程序不支持Groq转写，请更新本包本机程序');
   if(signal.aborted)throw new Error('视频处理已取消');
-  await groqCredentialPrompt().ensure({client:data.task.client,task:data.task,signal,assertLive:()=>_videoWorkflow.assertLive(data.task),onWait:()=>{
-   diagnoseTask(data.task,'groq.key_required');notify('STATUS','请在新窗口填写 Groq API Key，保存后继续当前音频转写...');
-  }});
+  if(!data.task.nativeCapabilities?.includes('speech-vad-v1'))throw new Error('本机程序缺少可靠人声检测，请更新到本包5.14.0本机程序后重试；未上传或发送');
   await _videoWorkflow.assertLive(data.task);
-  diagnoseTask(data.task,'groq.start');notify('STATUS','正在上传完整音轨到Groq并转写...');
-  const result=await data.task.client.transcribeGroq(data.localAudio,data.groqSettings,text=>notify('STATUS',text));
+  diagnoseTask(data.task,'groq.start');notify('STATUS','正在检测完整音轨的人声；有可靠人声才上传Groq...');
+  let result;
+  try{result=await data.task.client.transcribeGroq(data.localAudio,data.groqSettings,text=>notify('STATUS',text));}
+  catch(error){
+   if(!/未配置.*GROQ_API_KEY/.test(error.message))throw error;
+   await groqCredentialPrompt().ensure({client:data.task.client,task:data.task,signal,assertLive:()=>_videoWorkflow.assertLive(data.task),onWait:()=>{
+    diagnoseTask(data.task,'groq.key_required');notify('STATUS','请在新窗口填写 Groq API Key，保存后继续当前音频转写...');
+   }});
+   await _videoWorkflow.assertLive(data.task);
+   result=await data.task.client.transcribeGroq(data.localAudio,data.groqSettings,text=>notify('STATUS',text));
+  }
   if(signal.aborted||data.task.cancelled)throw new Error('视频处理已取消');
+  if(result.speechStatus==='none'){diagnoseTask(data.task,'groq.no_speech');return {srt:'',speechStatus:'none'};}
   if(!result.srt?.trim())throw new Error('Groq没有返回有效逐字稿，未发送到ChatGPT');
   diagnoseTask(data.task,'groq.completed',{duration:result.duration,elapsedMs:result.elapsedMs,originalBytes:result.inputBytes,outputBytes:result.uploadedBytes,subtitleCount:result.segmentCount});return result.srt;
  }
@@ -117,7 +133,8 @@ const _videoWorkflow=new VideoWorkflow({
  cancelTarget:task=>{
   recordTargetCancellation(task);
   if(task.targetTabId)chrome.tabs.sendMessage(task.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:task.id,reason:task.cancelReason}).catch(()=>{});
-  _targetCompletions.get(task.id)?.reject(new Error(task.cancelReason+'，未自动发送'));
+  const target=_targetCompletions.get(task.id);
+  target?.reject(new Error(target.submitted?'总结已发送；扩展已停止后续处理，请查看原 ChatGPT 对话，不要重复提交':task.cancelReason+'，未自动发送'));
  }
 });
 async function captureTaskSource(task){
@@ -236,7 +253,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
  if(msg.type==='VIDSIFT_TARGET_SENT'){
   const target=_targetCompletions.get(msg.taskId);
   const ok=target?.tabId===sender.tab?.id&&!!target;
-  if(ok){_diagnostics.record(msg.taskId,'target.submitted',{accepted:true},sender.tab.id);const tabId=_targetSourceTabs.get(sender.tab.id);_updateActiveTranscribeTask(tabId,'总结已发送，正在等待本次 ChatGPT 生成完成；后续视频仍在排队');}
+  if(ok){target.submitted=true;_diagnostics.record(msg.taskId,'target.submitted',{accepted:true},sender.tab.id);const tabId=_targetSourceTabs.get(sender.tab.id);_updateActiveTranscribeTask(tabId,'总结已发送，正在等待本次 ChatGPT 生成完成；后续视频仍在排队');}
   sendResponse({ok});return false;
  }
  if(msg.type==='CANCEL_VIDEO_TASK'){

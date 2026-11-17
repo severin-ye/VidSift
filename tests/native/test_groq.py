@@ -9,6 +9,10 @@ from native import host
 
 
 class GroqTests(unittest.TestCase):
+    def setUp(self):
+        detector=patch.object(host.Service,'detect_speech',return_value={'speechStatus':'present'})
+        detector.start();self.addCleanup(detector.stop)
+
     def test_transport_uses_requests_without_redirect_or_retry_and_closes_stream(self):
         import requests
         from urllib.request import Request

@@ -49,3 +49,9 @@ test('local cache reclaim and finish send fingerprint with explicit terminal sta
  p=c.finishLocalAudio(descriptor,'cancelled');assert.equal(r.p.last.status,'cancelled');
  r.p.onMessage.emit({id:r.p.last.id,type:'result',result:{finished:true}});await p;c.close();
 });
+
+test('speech detection forwards only the verified audio descriptor fields',async()=>{
+ const r=runtime(),c=new NativeMediaClient(r),pending=c.detectSpeech({fingerprint:'hash',videoId:'123',platform:'douyin',secret:'private'});
+ assert.equal(r.p.last.action,'detect_speech');assert.equal(r.p.last.secret,undefined);
+ r.p.onMessage.emit({id:r.p.last.id,type:'result',result:{speechStatus:'none'}});assert.deepEqual(await pending,{speechStatus:'none'});c.close();
+});

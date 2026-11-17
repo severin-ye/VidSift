@@ -11,10 +11,11 @@ const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><fo
  document.querySelector('button').onclick=async()=>{const text=document.querySelector('#prompt-textarea').innerText;window.sent++;await fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify({conversation_id:'${cid}',messages:[{id:'user-message-one',author:{role:'user'},content:{parts:[text]}}]})});document.querySelector('#prompt-textarea').textContent='';};</script>`;
 (async()=>{try{
  context=await chromium.launchPersistentContext(profile,{headless:true,executablePath:process.env.VIDSIFT_BROWSER_EXE||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',args:['--disable-extensions-except='+root,'--load-extension='+root]});
- let outgoing;
+ let outgoing,renamedTitle;
  await context.route('https://chatgpt.com/**',async route=>{const u=new URL(route.request().url());
   if(u.pathname==='/api/auth/session')return route.fulfill({json:{accessToken:'synthetic'}});
   if(u.pathname==='/backend-api/f/conversation'){outgoing=route.request().postDataJSON();return route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify({conversation_id:cid})+'\n\n'});}
+  if(u.pathname==='/backend-api/conversation/'+cid&&route.request().method()==='PATCH'){const title=route.request().postDataJSON().title;if(Array.from(title).length>128)return route.fulfill({status:422,json:{detail:'title too long'}});renamedTitle=title;return route.fulfill({json:{success:true}});}
   if(u.pathname==='/backend-api/conversation/'+cid)return route.fulfill({json:{conversation_id:cid,title:'generated title',create_time:Date.now()/1000-(old?86400:0),mapping:{first:{message:outgoing?.messages?.[0]}}}});
   return route.fulfill({contentType:'text/html',body:html});
  });
@@ -22,14 +23,14 @@ const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><fo
  const worker=context.serviceWorkers().find(w=>w.url().includes(id))||await context.waitForEvent('serviceworker');
  await control.evaluate(()=>chrome.storage.local.set({customPrompt:'acceptance prompt'}));
  for(const which of ['fresh','old']){
-  old=which==='old';outgoing=null;const page=await context.newPage();await page.goto('https://chatgpt.com/');await page.locator('#prompt-textarea').waitFor();
+  old=which==='old';outgoing=null;renamedTitle=null;const page=await context.newPage();await page.goto('https://chatgpt.com/');await page.locator('#prompt-textarea').waitFor();
   const target=await control.evaluate(async()=>{const tabs=await chrome.tabs.query({});return tabs.find(t=>t.url==='https://chatgpt.com/');});assert(target);
   const taskId='capture-'+which;
   await worker.evaluate(async ({taskId,tabId})=>{await _diagnostics.begin(taskId,{sourceTabId:tabId});await _diagnostics.record(taskId,'target.registered',{targetTabId:tabId});await _videoLibrary.register({taskId,tabId,source:{url:'https://www.bilibili.com/video/BV1LtWT66EMR',title:'acceptance'},tempChat:false});}, {taskId,tabId:target.id});
-  await control.evaluate(async ({taskId,tabId})=>chrome.tabs.sendMessage(tabId,{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',taskId,libraryEligible:true,videoTitle:'acceptance',prompt:'acceptance prompt',file:{name:'7698527283597905202_'+'荣格红书精读'.repeat(23)+'.srt',content:'1\n00:00:00,000 --> 00:00:01,000\nfixture'},bgOpen:true,tempChat:false}),{taskId,tabId:target.id});
+  await control.evaluate(async ({taskId,tabId})=>chrome.tabs.sendMessage(tabId,{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',taskId,libraryEligible:true,videoTitle:'原视频标题🧮'.repeat(40),prompt:'acceptance prompt',file:{name:'7698527283597905202_'+'荣格红书精读'.repeat(23)+'.srt',content:'1\n00:00:00,000 --> 00:00:01,000\nfixture'},bgOpen:true,tempChat:false}),{taskId,tabId:target.id});
   await page.waitForFunction(()=>window.sent===1,{},{timeout:20000});
   const files=await page.evaluate(()=>window.files);assert.equal(files.length,1);assert(Buffer.byteLength(files[0].name,'utf8')<=120);assert(files[0].name.endsWith('.srt'));assert.equal(files[0].content,'1\n00:00:00,000 --> 00:00:01,000\nfixture');report.checks.push(which+': long Chinese filename fits UTF-8 budget; complete subtitle sent once');
-  if(!old){await until(()=>control.evaluate(async()=>{const s=(await chrome.storage.local.get('videoLibraryState')).videoLibraryState;return s?.pending?.some(r=>r.chatgptUrl==='https://chatgpt.com/c/11111111-2222-4333-8444-555555555555');}));report.checks.push('preallocated ID verified from exact first user message and queued without URL guessing');}
+  if(!old){await until(()=>control.evaluate(async()=>{const s=(await chrome.storage.local.get('videoLibraryState')).videoLibraryState;return s?.pending?.some(r=>r.chatgptUrl==='https://chatgpt.com/c/11111111-2222-4333-8444-555555555555');}));report.checks.push('preallocated ID verified from exact first user message and queued without URL guessing');await until(()=>renamedTitle);assert.equal(Array.from(renamedTitle).length,128);report.checks.push('real content handler renames long Unicode title within server 128-character limit without resending');}
   else{await until(()=>control.evaluate(async()=>{const s=(await chrome.storage.local.get('vidsiftTaskDiagnostics')).vidsiftTaskDiagnostics;const library=(await chrome.storage.local.get('videoLibraryState')).videoLibraryState;return s.tasks.find(t=>t.taskId==='capture-old')?.events.some(e=>e.stage==='library.ownership_rejected'&&e.details.reason==='conversation_predates_task')&&library?.tasks.some(t=>t.taskId==='capture-old'&&t.captureStatus==='unconfirmed');}));const s=await control.evaluate(()=>chrome.storage.local.get('videoLibraryState'));report.oldState=s;assert(s.videoLibraryState.tasks.some(t=>t.taskId==='capture-old'&&t.captureStatus==='unconfirmed'),JSON.stringify(s));report.checks.push('old conversation rejected; submitted pending task preserved without another send');}
   await control.evaluate(async tabId=>chrome.tabs.sendMessage(tabId,{type:'EXT_ERROR',text:'日志验收错误：HTTP 503 token=never-export-this https://example.test/?secret=private'}),target.id);
   await page.getByText('日志验收错误：HTTP 503',{exact:false}).waitFor();
