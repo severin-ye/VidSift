@@ -3,6 +3,20 @@ function load(file,exports,document){const timers=new Map();let id=0;let listene
 function chatDOM(){const state={tiles:[],send:0},button={disabled:false,click(){state.send++;}},textarea={textContent:'prompt',closest(){return document;}};const document={querySelector(s){if(s==='#prompt-textarea')return textarea;if(s==='#composer-submit-button')return button;return null;},querySelectorAll(s){if(s.includes('file-tile'))return state.tiles;return [];}};return {state,button,textarea,document};}
 const tile=(name,busy=false,error=false)=>({textContent:name,getAttribute:k=>k==='aria-label'?name:null,querySelector:s=>(busy&&/progress|busy|spin|loading/.test(s))?{}:(error&&/alert|error|failed/.test(s))?{}:null});
 test('ChatGPT processing JPEG never confirms solely because send is enabled',async()=>{const d=chatDOM(),h=load('chatgpt-content.js','waitForFileAttachment',d.document);const t=tile('frame.jpg',true);d.state.tiles=[t];let settled=false;const p=h.api.waitForFileAttachment('frame.jpg').then(()=>settled=true);h.tick();await Promise.resolve();assert.equal(settled,false);t.querySelector=()=>null;h.tick();await p;assert.equal(settled,true);});
+test('ChatGPT recognizes an idle upload before the empty composer exposes an enabled Send button',async()=>{
+ for(const buttonExists of [true,false]){
+  const d=chatDOM(),h=load('chatgpt-content.js','waitForFileAttachment',d.document);
+  d.textarea.textContent='';
+  d.button.disabled=true;
+  if(!buttonExists)d.document.querySelector=s=>s==='#prompt-textarea'?d.textarea:null;
+  const uploaded=tile('video.srt');
+  d.state.tiles=[uploaded];
+  const receipt=h.api.waitForFileAttachment('video.srt');
+  h.tick();
+  assert.equal(await receipt,uploaded);
+  assert.equal(d.state.send,0);
+ }
+});
 test('ChatGPT send click occurs once while acceptance is uncertain',async()=>{const d=chatDOM(),h=load('chatgpt-content.js','clickSend',d.document);const p=h.api.clickSend();for(let i=0;i<30;i++)h.tick();assert.equal(d.state.send,1);d.textarea.textContent='';h.tick();await p;});
 test('ChatGPT explicit failed image rejects and blocks send',async()=>{const d=chatDOM(),h=load('chatgpt-content.js','waitForFileAttachment',d.document);d.state.tiles=[tile('frame.jpg',false,true)];const p=h.api.waitForFileAttachment('frame.jpg');h.tick();await assert.rejects(p,/失败/);assert.equal(d.state.send,0);});
 test('ChatGPT JPEG injection preserves same-name existing user upload',async()=>{const d=chatDOM();let changes=0;const input={value:'',dispatchEvent(){changes++}};const old=tile('frame.jpg');old.querySelector=()=>({click(){throw Error('must not remove user upload')}});d.state.tiles=[old];const original=d.document.querySelectorAll;d.document.querySelectorAll=s=>s==='input[type="file"]'?[input]:original(s);input.getAttribute=()=>null;const h=load('chatgpt-content.js','attachFile',d.document);await h.api.attachFile('frame.jpg',undefined,{name:'frame.jpg',mime:'image/jpeg',base64:'/9j/AA=='});assert.equal(input.files[0].type,'image/jpeg');assert.equal(changes,2);assert.equal(d.state.tiles.length,1);});

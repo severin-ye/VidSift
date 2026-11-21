@@ -117,6 +117,14 @@
   }
 
   let _retryFailedBtn = null;
+  function restorePromptAfterManualUpload(task) {
+    const editor = findTextarea();
+    if (task && task === _lastConversationTask && !task.submitted && !cancelledTasks.has(task.taskId)
+        && task.recoveryPrompt && editor === task.recoveryEditor && !readComposerText(editor).trim()) {
+      inputPrompt(task.recoveryPrompt, editor);
+    }
+  }
+
   function showFailedAttachmentRetry(error) {
     if (!error.retryable || !error.attachment) return;
     _retryFailedBtn?.remove();
@@ -125,6 +133,7 @@
     button.textContent = `重试失败附件：${error.attachment.name}`;
     button.title = button.textContent;
     button.style.cssText = getFloatingActionButtonStyle(224, '#2563eb');
+    const task = _lastConversationTask;
     button.addEventListener('click', async () => {
       if (_taskActive) return;
       button.disabled = true;
@@ -132,6 +141,7 @@
         // Only the positively failed tile owned by this attempt may be removed.
         (error.tile?.querySelector('button[aria-label^="Remove file"]') || error.tile?.querySelector('button[aria-label^="Remove "]'))?.click();
         await attachFileWithRetry(error.attachment.name, error.attachment.content, 1, error.attachment);
+        restorePromptAfterManualUpload(task);
         button.remove(); _retryFailedBtn = null;
         showStatus('失败附件已重新上传；请检查所有附件后手动发送。');
       } catch (e) { showError(e.message); if (e.retryable) { error = e; button.disabled = false; } }
@@ -183,7 +193,9 @@
         _retryUploadBtn.style.cursor = 'not-allowed';
         try {
           showStatus('正在重新上传字幕文件...');
+          const task = _lastConversationTask;
           await attachFileWithRetry(_lastFile.name, _lastFile.content);
+          restorePromptAfterManualUpload(task);
           showStatus('字幕文件已重新上传，可继续手动发送。');
         } catch (e) {
           console.error('[ext] manual retry upload failed:', e);
@@ -365,8 +377,7 @@
     return {ready:false};
   }
 
-  function inputPrompt(text) {
-    const textarea = findTextarea();
+  function inputPrompt(text, textarea = findTextarea()) {
     if (!textarea) return;
 
     textarea.focus();
@@ -379,6 +390,14 @@
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
     } else {
       // contenteditable div (ProseMirror)
+      if (!text) {
+        const range = document.createRange();
+        range.selectNodeContents(textarea);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        if (document.execCommand('delete') && !readComposerText(textarea).trim()) return;
+      }
       textarea.innerHTML = '';
       textarea.focus();
       const success = document.execCommand('insertText', false, text);
@@ -511,8 +530,8 @@
   // authoritative signal: ChatGPT keeps the send button disabled while any upload is in
   // progress, and re-enables it only when all uploads finish (success or failure).
   //
-  // After the send button re-enables we then verify the file tile is still in the DOM.
-  // If the tile is gone → upload failed (ChatGPT removed it on error).
+  // An empty composer can keep Send disabled after upload. In that case the new
+  // tile must be present and idle, and the real send still waits for an enabled button.
   //
   // NOTE: behavior-btn appears immediately on tile creation, NOT after upload completes,
   // so it cannot be used as an upload-success signal.
@@ -569,7 +588,7 @@
         }
         if (tileStillPresent && newFileTile.querySelector('[role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]')) return;
         // Send button enabled and this new file remains without processing/error indicators.
-        if (btn && !btn.disabled) {
+        if ((btn && !btn.disabled) || (tileStillPresent && !readComposerText().trim())) {
           if (tileStillPresent) {
             clearInterval(timer);
             console.log('[ext] waitForFileAttachment: upload success, tile=', newFileTile.getAttribute('aria-label'));
@@ -893,6 +912,12 @@
 
       (async () => {
         let titleTimer = null, libraryBinding = null, generation = null, submitted = false;
+        let draftEditor, draftText;
+        function clearUnsentPrompt() {
+          if (!submitted && draftText && findTextarea() === draftEditor && readComposerText(draftEditor) === draftText) {
+            inputPrompt('', draftEditor);
+          }
+        }
         const conversationTitle = VidSiftConversationTitle.formatConversationTitle(msg.videoTitle, {...msg.source, videoId:msg.source?.videoId||msg.bvid});
         const bvidPrefix = msg.bvid ? `[${msg.bvid}] ` : '';
         console.log('[ext] CHATGPT_PREPARE_PROMPT received:',
@@ -911,16 +936,22 @@
           }, 200);
         }
         try {
+          const editor = findTextarea();
+          if (!editor || readComposerText(editor).trim()) {
+            const error = 'ChatGPT 输入框已有草稿或尚未就绪，未自动发送总结';
+            showError(error);
+            reportTarget(msg, false, error);
+            return;
+          }
           const attachments = VidSiftAttachments.normalizeMessage(msg);
+          const prompt = VidSiftAttachments.contextualPrompt(msg.prompt ?? await loadPrompt(), attachments, msg.source?.url || msg.sourceUrl || msg.bvid || msg.videoTitle);
+          _lastConversationTask.recoveryEditor = editor;
+          _lastConversationTask.recoveryPrompt = prompt;
           const subtitle = attachments.find(a => a.content !== undefined);
           if (subtitle) showSaveButton(subtitle.name, subtitle.content);
           if (conversationTitle && !msg.tempChat) {
             showRetryRenameButton(null, conversationTitle);
           }
-          showStatus('正在添加字幕文件...');
-          showStatus('正在输入提示词...');
-          inputPrompt(VidSiftAttachments.contextualPrompt(msg.prompt ?? await loadPrompt(), attachments, msg.source?.url || msg.sourceUrl || msg.bvid || msg.videoTitle));
-          _lastConversationTask.expectedText=readComposerText();
           showStatus('正在等待文件上传...');
           const receipts = [];
           for (const attachment of attachments) {
@@ -932,15 +963,31 @@
           showStatus('正在发送...');
           assertNotCancelled(msg.taskId);
           if(!msg.tempChat&&(conversationTitle||msg.libraryEligible||msg.awaitGeneration)){
-            libraryBinding=captureSubmittedConversation(readComposerText(),msg.taskId);
+            libraryBinding=captureSubmittedConversation(prompt,msg.taskId);
             await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
           }
           const temporaryFinished=msg.tempChat&&msg.awaitGeneration?createTemporaryGenerationTracker():null;
-          await clickSend(msg.taskId, () => {
+          const verifyAttachments = () => {
             const visible = getVisibleFileTiles();
             for (const tile of receipts) {
               if (!visible.includes(tile) || tile.querySelector('[role="alert"], [data-state="error"], [class*="error"], [role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]')) throw new Error('附件状态已改变，未自动发送');
             }
+          };
+          assertNotCancelled(msg.taskId);
+          verifyAttachments();
+          draftEditor = findTextarea();
+          if (!draftEditor || readComposerText(draftEditor).trim()) throw new Error('ChatGPT 输入框已改变，已保留当前草稿');
+          const draftPage = location.href;
+          inputPrompt(prompt, draftEditor);
+          draftText = readComposerText(draftEditor);
+          _lastConversationTask.expectedText = draftText;
+          window.addEventListener('pagehide', clearUnsentPrompt);
+          if (prompt.trim() && !draftText.trim()) throw new Error('ChatGPT 没有接收本次提示词，未自动发送');
+          await clickSend(msg.taskId, () => {
+            if (location.href !== draftPage || findTextarea() !== draftEditor || readComposerText(draftEditor) !== draftText) {
+              throw new Error('ChatGPT 页面或输入框已改变，未自动发送总结');
+            }
+            verifyAttachments();
           });
           submitted=true;
           _lastConversationTask.submitted=true;
@@ -995,7 +1042,11 @@
           } else {
             showError(`${bvidPrefix}错误：${e.message}`);
           }
-        } finally { if(generation)await generation;libraryBinding?.stop(); _taskActive = false; }
+        } finally {
+          window.removeEventListener('pagehide', clearUnsentPrompt);
+          try { clearUnsentPrompt(); }
+          finally { if(generation)await generation;libraryBinding?.stop(); _taskActive = false; }
+        }
       })();
       return;
     }

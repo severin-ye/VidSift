@@ -22,20 +22,49 @@ test('blank or metadata-only title uses source identity and never metadata as fa
  assert.equal(format('#知识'), '');
 });
 const content=fs.readFileSync('chatgpt-content.js','utf8');
-async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=false}={}){
- let sent=0;const renames=[],retries=[],timers=[];
+async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=false,uploadError,sendError,initialDraft='',draftDuringUpload}={}){
+ let sent=0, draftAtUpload, failure;const renames=[],retries=[],timers=[];
+ const editor={text:initialDraft};
+ const tile={querySelector:()=>null};
  const c={msg:{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',videoTitle:title,source,bvid,tempChat,taskId:'task',file:{name:'original.srt',content:'subtitle'}},
   VidSiftConversationTitle:{formatConversationTitle:format},_taskActive:false,globalThis:null,Date,console:{log(){},error(){},warn(){}},
   getConversationIdFromUrl:()=>null,sendResponse(){},document:{title:''},setInterval(fn){timers.push(fn);return 1;},clearInterval(){},
-  VidSiftAttachments:{normalizeMessage:m=>[m.file],contextualPrompt:()=>''},showSaveButton(){},showRetryRenameButton:(id,title)=>retries.push({id,title}),showStatus(){},inputPrompt(){},readComposerText:()=>'',loadPrompt:async()=>'',assertNotCancelled(){},attachFileWithRetry:async()=>({}),
-  captureSubmittedConversation:()=>({ready:Promise.resolve(),promise:Promise.resolve(id),stop(){}}),clickSend:async()=>{sent++;},reportTarget(){},hideSaveButton(){},scrollToResponseOnTabFocus(){},hideStatus(){},showError(){},hideRetryRenameButton(){},
+  VidSiftAttachments:{normalizeMessage:m=>[m.file],contextualPrompt:prompt=>prompt},showSaveButton(){},showRetryRenameButton:(id,title)=>retries.push({id,title}),showStatus(){},findTextarea:()=>editor,inputPrompt:text=>{editor.text=text;},readComposerText:()=>editor.text,loadPrompt:async()=>'synthetic video prompt',assertNotCancelled(){},attachFileWithRetry:async()=>{
+   draftAtUpload=editor.text;
+   if(draftDuringUpload!==undefined)editor.text=draftDuringUpload;
+   if(uploadError)throw Error(uploadError);
+   return tile;
+  },
+  getVisibleFileTiles:()=>[tile],
+  window:{addEventListener(){},removeEventListener(){}},location:{href:'https://chatgpt.com/'},
+  captureSubmittedConversation:()=>({ready:Promise.resolve(),promise:Promise.resolve(id),stop(){}}),clickSend:async()=>{if(sendError)throw Error(sendError);sent++;editor.text='';},reportTarget:(msg,ok,error)=>{if(!ok)failure=error;},hideSaveButton(){},scrollToResponseOnTabFocus(){},hideStatus(){},showError(){},hideRetryRenameButton(){},
   renameConversationViaAPI:async(id,title)=>{renames.push({id,title});return !pending;},showFailedAttachmentRetry(){},chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
  c.globalThis=c;vm.createContext(c);
  const handler=content.slice(content.indexOf("    if (msg.type === 'VIDSIFT_CHATGPT_PREPARE_PROMPT')"),content.indexOf("    if (msg.type === 'EXT_STATUS')"));
  vm.runInContext('(function(){'+handler+'})();',c);
  for(let n=0;n<30&&c._taskActive;n++)await new Promise(setImmediate);
- assert.equal(c._taskActive,false);return {sent,renames,retries,title:c.document.title};
+ assert.equal(c._taskActive,false);return {sent,renames,retries,title:c.document.title,draftAtUpload,draft:editor.text,failure};
 }
+test('ChatGPT leaves the composer blank while uploading and after an upload fails',async()=>{
+ const result=await run({tempChat:true,uploadError:'upload failed'});
+ assert.equal(result.draftAtUpload,'');
+ assert.equal(result.draft,'');
+ assert.equal(result.sent,0);
+ assert.equal(result.failure,'upload failed');
+});
+test('ChatGPT clears its own unsent prompt when submission fails',async()=>{
+ const result=await run({tempChat:true,sendError:'send failed'});
+ assert.equal(result.draft,'');
+ assert.equal(result.sent,0);
+ assert.equal(result.failure,'send failed');
+});
+test('ChatGPT preserves user drafts present before or written during the upload',async()=>{
+ for(const options of [{initialDraft:'my own draft'},{draftDuringUpload:'my own draft'}]){
+  const result=await run({tempChat:true,...options});
+  assert.equal(result.draft,'my own draft');
+  assert.equal(result.sent,0);
+ }
+});
 test('actual modern GPT handler sends once and uses same formatted title for pending retry',async()=>{
  const result=await run({source:{platform:'douyin',title:raw,videoId:'123'},pending:true});
  assert.equal(result.sent,1);assert.deepEqual(result.renames,[{id:'owned',title:'【抖音】'+headline}]);
