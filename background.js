@@ -122,7 +122,10 @@ function _updateActiveTranscribeTask(biliTabId, statusText) {
 function _clearActiveTranscribeTask(biliTabId) {
   if (biliTabId == null) return;
   const previous=_activeTranscribeTaskMap.get(biliTabId);
-  if(previous)_lastTranscribeTaskMap.set(biliTabId, {statusText:previous.statusText});
+  if(previous){
+    _lastTranscribeTaskMap.set(biliTabId,{statusText:previous.statusText});
+    if(_lastTranscribeTaskMap.size>100)_lastTranscribeTaskMap.delete(_lastTranscribeTaskMap.keys().next().value);
+  }
   _activeTranscribeTaskMap.delete(biliTabId);
 }
 
@@ -132,8 +135,8 @@ function _getActiveTranscribeTask(biliTabId) {
 }
 
 function finishLegacyTask(task) {
-  if (!task || _legacyGuard.get(task.tabId) !== task) return;
-  _clearActiveTranscribeTask(task.tabId);
+  if (!task || _legacyGuard.get(task.taskKey) !== task) return;
+  _clearActiveTranscribeTask(task.taskKey);
   _legacyGuard.finish(task);
 }
 
@@ -210,12 +213,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
   if (msg.type === 'GET_TAB_TRANSCRIBE_STATUS') {
-    let sourceTabId=_targetSourceTabs.get(msg.tabId)??msg.tabId;
-    if(msg.includeQueue&&!_getActiveTranscribeTask(sourceTabId)&&!_legacyGuard.get(sourceTabId)&&_summaryQueue.length)sourceTabId=_summaryQueue[0].sourceTabId;
-    const task = _getActiveTranscribeTask(sourceTabId);
-    const legacy = _legacyGuard.get(sourceTabId);
-    const result={sourceTabId,active:!!task||!!(legacy&&!legacy.cancelled),...(_lastTranscribeTaskMap.get(sourceTabId)||{}),...(task||{}),...(!task&&legacy&&!legacy.cancelled?{taskType:'legacy',statusText:legacy.statusText||'正在处理当前视频内容'}:{})};
-    const position=_summaryQueue.findIndex(job=>job.sourceTabId===sourceTabId);
+    const target=_targetSourceTabs.get(msg.tabId);
+    let sourceTabId=target?.tabId??msg.tabId,taskKey=target?.taskKey??VidSiftPlatforms.taskKey(sourceTabId,msg.sourceKey);
+    if(target?.sourceLocked&&_videoWorkflow.tasks.get(taskKey)?.id!==target.id){sendResponse({sourceTabId,active:false});return false;}
+    if(msg.includeQueue&&!target&&!_getActiveTranscribeTask(taskKey)&&!_legacyGuard.get(taskKey)&&_summaryQueue.length){
+      ({sourceTabId,taskKey}=_summaryQueue[0]);
+    }
+    const task = _getActiveTranscribeTask(taskKey);
+    const legacy = _legacyGuard.get(taskKey);
+    const result={sourceTabId,cancelTabId:target?msg.tabId:sourceTabId,sourceKey:(_videoWorkflow.tasks.get(taskKey)||legacy)?.source.key,active:!!task||!!(legacy&&!legacy.cancelled),...(_lastTranscribeTaskMap.get(taskKey)||{}),...(task||{}),...(!task&&legacy&&!legacy.cancelled?{taskType:'legacy',statusText:legacy.statusText||'正在处理当前视频内容'}:{})};
+    const position=_summaryQueue.findIndex(job=>job.taskKey===taskKey);
     if(position>=0){result.queuePosition=position+1;result.queueCount=_summaryQueue.length;result.statusText=(result.statusText||'正在处理视频')+`（队列 ${position+1}/${_summaryQueue.length}）`;}
     sendResponse(result);
     return false;
@@ -224,7 +231,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // Target-page events must be bound to both task identity and target tab.
     const videoTask=[..._videoWorkflow.tasks.values()].find(t=>t.id===msg.taskId&&t.targetTabId===sender.tab?.id);
     if(videoTask){
-      if(msg.state==='status'&&msg.text)_updateActiveTranscribeTask(videoTask.tabId,msg.text);
+      if(msg.state==='status'&&msg.text)_updateActiveTranscribeTask(videoTask.taskKey??videoTask.tabId,msg.text);
       sendResponse({ok:true});return false;
     }
     const targetLegacy=_legacyGuard.get(msg.biliTabId);
@@ -459,7 +466,7 @@ function updateSummaryQueue(){
   _summaryQueue.forEach((job,index)=>{
     const text=index===0&&_summaryQueueRunning?'正在处理当前总结，后续视频按顺序等待':`总结已加入队列，前面还有 ${index} 个视频`;
     if(job.task)job.task.statusText=text;
-    _updateActiveTranscribeTask(job.sourceTabId,text);
+    _updateActiveTranscribeTask(job.taskKey,text);
   });
 }
 async function _openChatGPTAndSend(data){
@@ -470,7 +477,7 @@ async function _openChatGPTAndSend(data){
 function runSummaryJob(data,run){
   const task=data.legacyTask||data.task;
   return new Promise((resolve,reject)=>{
-    _summaryQueue.push({task,sourceTabId:data.biliTabId,resolve,reject,data,run});
+    _summaryQueue.push({task,sourceTabId:data.biliTabId,taskKey:task?.taskKey??data.biliTabId,resolve,reject,data,run});
     updateSummaryQueue();void drainSummaryQueue();
   });
 }

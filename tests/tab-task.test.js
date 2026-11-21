@@ -154,3 +154,47 @@ test('source cancellation after accepted submission never claims the summary was
  await f.dispatch({type:'VIDSIFT_SOURCE_CHANGED',url:'https://www.douyin.com/video/222'},{tab:{id:7}});
  const message=await vm.runInContext('cancelledResult',f.context);assert.match(message,/总结已发送/);assert.doesNotMatch(message,/未.*发送/);assert.equal(vm.runInContext('modern.cancelled',f.context),true);
 });
+
+test('confirmed Douyin works in one feed stay separate when the source changes or has no visible player',async()=>{
+ const f=fixture();
+ const work=id=>({platform:'douyin',videoId:id,key:'douyin:'+id,url:'https://www.douyin.com/video/'+id,frameId:0,frameUrl:'https://www.douyin.com/follow'});
+ const a=work('111'),b=work('222'),c=work('333');
+ let player=a,release,reached;
+ f.context.chrome.tabs.get=async id=>({id,url:id===7?a.frameUrl:'https://chatgpt.com/',index:0,windowId:1});
+ f.context.chrome.scripting={executeScript:async request=>request.files?[]:[{frameId:0,result:request.args?{videoId:player?.videoId}:{...player,pageUrl:a.frameUrl,visiblePlayers:player?1:0}}]};
+ f.context.holdTranscription=new Promise(resolve=>release=resolve);
+ const transcribing=new Promise(resolve=>reached=resolve);
+ f.context.transcribing=reached;
+ vm.runInContext(`Object.assign(_videoWorkflow.deps,{
+  client:()=>({resolve:async({url})=>{const videoId=url.split('/').at(-1);return {videoId,platform:'douyin',duration:60,localAudio:{videoId}};},release:async()=>{},close(){}}),
+  loadLocalMedia:async()=>null,saveLocalMedia:async()=>{},finishLocalMedia:async()=>{},
+  transcribe:async(_audio,{source})=>{if(source.videoId==='111'){transcribing();await holdTranscription;}return 'transcript for '+source.videoId;}
+ });`,f.context);
+ function start(source){
+  f.context.clickedWork=source;
+  return vm.runInContext('startVideoSummary({openerTabId:7,sourceUrl:clickedWork.url,clickedSource:clickedWork,clickedPageSource:{videoId:clickedWork.videoId}},()=>{})',f.context);
+ }
+ const first=start(a);
+ first.catch(()=>{});
+ await transcribing;
+ let second,third;
+ try{
+  player=b;
+  await f.dispatch({type:'VIDSIFT_SOURCE_CHANGED',url:b.url},{tab:{id:7}});
+  assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7,sourceKey:b.key})).active,false);
+  second=start(b);second.catch(()=>{});
+  await new Promise(setImmediate);
+  assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7,sourceKey:b.key})).queuePosition,2);
+  await assert.rejects(start(b),/已有总结任务/);
+  third=start(c);third.catch(()=>{});
+  assert.equal((await f.dispatch({type:'CANCEL_VIDEO_TASK',tabId:7,sourceKey:c.key})).ok,true);
+  assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7,sourceKey:a.key})).active,true);
+  assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7,sourceKey:b.key})).active,true);
+  player=null;
+ }finally{
+  release();await Promise.allSettled([first,second,third]);
+ }
+ await first;await second;
+ await assert.rejects(third,/取消/);
+ assert.deepEqual(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').map(({msg})=>[msg.source.videoId,msg.file.content]),[['111','transcript for 111'],['222','transcript for 222']]);
+});

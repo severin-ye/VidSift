@@ -27,7 +27,7 @@ async function verifySourceChange(task){
  if(source?.key!==task.source.key){task.cancelSourceKey=source?.key||null;_videoWorkflow.cancel(task.tabId,source?'原视频页当前作品已改变，已停止发送旧作品':'原视频页当前网址已离开该作品，已停止发送');}
 }
 function waitForTarget(task,tabId){
- task.targetTabId=tabId;_targetSourceTabs.set(tabId,task.tabId);
+ task.targetTabId=tabId;_targetSourceTabs.set(tabId,{tabId:task.tabId,taskKey:task.taskKey??task.tabId,id:task.id,sourceLocked:task.sourceLocked});
  diagnoseTask(task,'target.registered',{targetTabId:tabId});
  return new Promise((resolve,reject)=>{
   // Only active target jobs keep the worker alive; ordinary popup ports do not.
@@ -45,11 +45,11 @@ async function sendVideoAIStudio(data){
  const tab=await createTaskTarget('https://aistudio.google.com/prompts/new_chat',false,data.openerTabId);
  recordTargetPhase(data.task,tab,'created-background');
  const completed=waitForTarget(data.task,tab.id);completed.catch(()=>{});
- _updateActiveTranscribeTask(data.task.tabId,'AI Studio 已在后台创建，正在连接页面上传脚本...');
+ _updateActiveTranscribeTask(data.task.taskKey??data.task.tabId,'AI Studio 已在后台创建，正在连接页面上传脚本...');
  try{
   await _pageBridge.waitFor(tab.id,'aistudio',{assertLive:()=>_videoWorkflow.assertLive(data.task)});
   recordTargetPhase(data.task,await chrome.tabs.get(tab.id),'script-connected');
-  _updateActiveTranscribeTask(data.task.tabId,'AI Studio 上传脚本已连接，正在移交音频和提示词...');
+  _updateActiveTranscribeTask(data.task.taskKey??data.task.tabId,'AI Studio 上传脚本已连接，正在移交音频和提示词...');
   const accepted=await VidSiftAttachmentTransfer.send(chrome,tab.id,{type:'VIDSIFT_AISTUDIO_UPLOAD_AND_RUN',taskId:data.task.id,attachments:data.attachments,biliTabId:data.openerTabId,tempChat:data.tempChat,bgOpen:data.bgOpen,videoTitle:data.videoTitle,bvid:data.bvid,source:data.source,relayToChatGPT:true,duration:data.duration},{assertLive:()=>_videoWorkflow.assertLive(data.task)});
   if(!accepted?.ok)throw new Error(accepted?.error||'AI Studio 未确认接收音频任务，页面材料未重复上传');
   recordTargetPhase(data.task,await chrome.tabs.get(tab.id),'task-accepted');
@@ -167,21 +167,29 @@ async function prepareBilibiliSource(task,msg,captured){
 }
 async function startVideoSummary(msg,notify){
  let admission;
- if(msg.clickedSource){
+ const clicked=msg.clickedSource,identified=VidSiftPlatforms.identify(clicked?.url);
+ const sourceLocked=identified?.platform==='douyin'&&clicked.platform==='douyin';
+ if(sourceLocked){
+  if(identified.key!==clicked.key||identified.videoId!==clicked.videoId||msg.clickedPageSource&&String(msg.clickedPageSource.videoId)!==identified.videoId)throw new Error('已采集作品与点击的抖音作品不一致，未发送内容');
+  // The popup displays this verified work. Later feed navigation cannot change its identity.
+  admission={source:{...clicked,url:'https://www.douyin.com/video/'+identified.videoId},pageSource:msg.clickedPageSource};
+ }else if(clicked){
   try{admission=await VidSiftCurrentVideo.discover(chrome,await chrome.tabs.get(msg.openerTabId));}
-  catch(error){if(!/No tab with id\b|标签页不存在|不存在的标签页/i.test(String(error?.message||error)))throw error;admission={source:msg.clickedSource,pageSource:msg.clickedPageSource};msg.sourceClosed=true;}
-  if(admission.source.key!==msg.clickedSource.key||admission.source.frameId!==msg.clickedSource.frameId)throw new Error('源视频已切换，请重新打开扩展后总结当前视频');
-  msg.sourceUrl=admission.source.url;
+  catch(error){if(!/No tab with id\b|标签页不存在|不存在的标签页/i.test(String(error?.message||error)))throw error;admission={source:clicked,pageSource:msg.clickedPageSource};msg.sourceClosed=true;}
+  if(admission.source.key!==clicked.key||admission.source.frameId!==clicked.frameId)throw new Error('源视频已切换，请重新打开扩展后总结当前视频');
  }
+ if(admission)msg.sourceUrl=admission.source.url;
  const source=admission?.source||VidSiftPlatforms.identify(msg.sourceUrl);
  if(!source)throw new Error('视频来源无效');
  const tabId=msg.openerTabId;
- if(_videoWorkflow.tasks.has(tabId)||_legacyGuard.get(tabId)||_getActiveTranscribeTask(tabId))throw new Error('当前视频已有总结任务，请等待或取消');
+ const taskKey=VidSiftPlatforms.taskKey(tabId,sourceLocked?source.key:undefined);
+ if(_videoWorkflow.tasks.has(taskKey)||_legacyGuard.get(taskKey)||_getActiveTranscribeTask(taskKey))throw new Error('当前视频已有总结任务，请等待或取消');
  // Metadata acquisition belongs to the worker, never to the popup or source page.
- const task=_legacyGuard.begin(tabId,msg.sourceUrl);task.diagnosticId=msg.diagnosticId;
+ const task=_legacyGuard.begin(tabId,msg.sourceUrl,{taskKey,sourceLocked});task.diagnosticId=msg.diagnosticId;
+ Object.assign(msg,{taskKey,sourceLocked});
  if(admission){task.source={...source};task.admission={source:{...source},pageSource:admission.pageSource};task.sourceClosed=msg.sourceClosed===true;}
  diagnoseTask(task,'task.started');
- _setActiveTranscribeTask(tabId,'video','已接收视频，正在后台取得字幕...');
+ _setActiveTranscribeTask(taskKey,'video','已接收视频，正在后台取得字幕...');
  const configuration=(async()=>{await DouyinLocalSettings.migrate(chrome.storage.local);return chrome.storage.local.get(['selfHostedApiUrl','selfHostedApiToken','transcribeService','localModel','localDevice','douyinLocalSettings','groqSettings']);})();
  configuration.catch(()=>{});
  // Capture only metadata in parallel. Provider work and GPT generation stay FIFO.
@@ -211,11 +219,15 @@ async function startVideoSummary(msg,notify){
  }catch(error){diagnoseTask(task,'task.failed',{category:VidSiftDiagnostics.category(error),errorName:error.name});throw error;}finally{finishLegacyTask(task);}
 }
 chrome.runtime.onConnect.addListener(port=>{
- if(port.name!=='vidsift-video')return;
+ if(port.name!=='vidsift-video'||port.sender?.id!==chrome.runtime.id||port.sender?.url!==chrome.runtime.getURL('popup.html'))return;
  let connected=true;port.onDisconnect.addListener(()=>{connected=false;});
  port.onMessage.addListener(msg=>{
   if(msg.type!=='START_VIDEO_TASK')return;
-  const notify=(type,text)=>{overlayMsg(msg.openerTabId,{type:type==='ERROR'?'EXT_ERROR':'EXT_STATUS',text});if(connected)try{port.postMessage({type,text});}catch{}};
+  let errorReported=false;
+  const notify=(type,text)=>{
+   if(type==='ERROR'){if(errorReported)return;errorReported=true;void _diagnostics.visibleError({message:text,component:'background',taskId:msg.diagnosticId},msg.openerTabId);}
+   if(connected)try{port.postMessage({type,text});}catch{}
+  };
   startVideoSummary(msg,notify).catch(e=>notify('ERROR',e.message));
  });
 });
@@ -253,14 +265,15 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
  if(msg.type==='VIDSIFT_TARGET_SENT'){
   const target=_targetCompletions.get(msg.taskId);
   const ok=target?.tabId===sender.tab?.id&&!!target;
-  if(ok){target.submitted=true;_diagnostics.record(msg.taskId,'target.submitted',{accepted:true},sender.tab.id);const tabId=_targetSourceTabs.get(sender.tab.id);_updateActiveTranscribeTask(tabId,'总结已发送，正在等待本次 ChatGPT 生成完成；后续视频仍在排队');}
+  if(ok){target.submitted=true;_diagnostics.record(msg.taskId,'target.submitted',{accepted:true},sender.tab.id);const taskKey=_targetSourceTabs.get(sender.tab.id)?.taskKey;_updateActiveTranscribeTask(taskKey,'总结已发送，正在等待本次 ChatGPT 生成完成；后续视频仍在排队');}
   sendResponse({ok});return false;
  }
  if(msg.type==='CANCEL_VIDEO_TASK'){
   const requestedId=sender.tab?.id??msg.tabId;
-  const tabId=_targetSourceTabs.get(requestedId)??requestedId;
-  const cancelled=_videoWorkflow.cancel(tabId);const legacy=_legacyGuard.cancel(tabId);
-  if(legacy){if(legacy.targetTabId)chrome.tabs.sendMessage(legacy.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:legacy.id}).catch(()=>{});_targetCompletions.get(legacy.id)?.reject(new Error('视频任务已取消'));_clearActiveTranscribeTask(tabId);}
+  const target=_targetSourceTabs.get(requestedId),taskKey=target?.taskKey??VidSiftPlatforms.taskKey(requestedId,msg.sourceKey);
+  if(target?.sourceLocked&&_videoWorkflow.tasks.get(taskKey)?.id!==target.id){sendResponse({ok:false});return false;}
+  const cancelled=_videoWorkflow.cancel(taskKey);const legacy=_legacyGuard.cancel(taskKey);
+  if(legacy){if(legacy.targetTabId)chrome.tabs.sendMessage(legacy.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:legacy.id}).catch(()=>{});_targetCompletions.get(legacy.id)?.reject(new Error('视频任务已取消'));_clearActiveTranscribeTask(taskKey);}
   sendResponse({ok:cancelled||!!legacy});return false;
  }
  if(msg.type==='VIDSIFT_SOURCE_CHANGED'){
@@ -282,7 +295,6 @@ chrome.tabs.onUpdated.addListener((id,change)=>{
 });
 chrome.tabs.onRemoved.addListener(id=>{
  _targetSourceTabs.delete(id);
- const task=_videoWorkflow.tasks.get(id),legacy=_legacyGuard.get(id);
- for(const pending of [task,legacy])if(pending){pending.sourceClosed=true;diagnoseTask(pending,'source.closed');}
+ for(const pending of [..._videoWorkflow.tasks.values(),..._legacyGuard.tasks.values()])if(pending.tabId===id){pending.sourceClosed=true;diagnoseTask(pending,'source.closed');}
  for(const target of _targetCompletions.values())if(target.tabId===id)target.reject(new Error('目标页面已关闭，未完成发送'));
 });

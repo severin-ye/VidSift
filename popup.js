@@ -30,7 +30,7 @@ screenshotCheckbox.addEventListener('change', async () => {
 });
 cancelBtn.addEventListener('click', async () => {
  const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
- const result = await chrome.runtime.sendMessage({type:'CANCEL_VIDEO_TASK',tabId:statusTabId??tab.id});
+ const result = await chrome.runtime.sendMessage({type:'CANCEL_VIDEO_TASK',tabId:activeTranscribeTask?.cancelTabId??statusTabId??tab.id,sourceKey:activeTranscribeTask?.sourceKey??sourceDiscoverySnapshot?.source?.key});
  setStatus(result.ok ? '已请求取消当前视频任务' : '当前没有可取消的视频任务');
 });
 
@@ -135,7 +135,7 @@ function setStatus(msg) {
 async function getActiveTranscribeTask(tabId) {
   statusTabId = tabId;
   try {
-    const result = await chrome.runtime.sendMessage({ type: 'GET_TAB_TRANSCRIBE_STATUS', tabId, includeQueue: !currentPlatform });
+    const result = await chrome.runtime.sendMessage({ type: 'GET_TAB_TRANSCRIBE_STATUS', tabId, sourceKey: currentPlatform==='douyin'?sourceDiscoverySnapshot.source.key:undefined, includeQueue: !currentPlatform });
     if (!result) throw new Error('扩展后台未响应，请在扩展管理页重新加载知行视频总结');
     return result;
   } catch (e) {
@@ -342,7 +342,7 @@ runBtn.addEventListener('click', run);
     const taskStatus = await getActiveTranscribeTask(tab.id);
     if (!sourceDiscoverySnapshot) {
       viewingTaskTarget=true;
-      if(taskStatus.sourceTabId!==tab.id){
+      if(taskStatus.active||taskStatus.sourceTabId!==tab.id){
         if(!applyActiveTranscribeTask(taskStatus)){runBtn.textContent='视频任务已结束';setStatus(taskStatus.statusText||'视频任务已结束');}
       }else{runBtn.textContent='请从视频页开始';setStatus(discoveryError||'请在 B站、YouTube 或抖音视频页面使用');}
       runBtn.disabled=true;return;
@@ -350,7 +350,11 @@ runBtn.addEventListener('click', run);
     activeTranscribeTask = taskStatus.active ? taskStatus : null;
     if (currentPlatform !== 'bilibili') {
       forceAIStudioLabel.style.display=''; runBtn.disabled=false;
-      if(!applyActiveTranscribeTask(taskStatus)) {setStatus(taskStatus.statusText || '已识别'+(currentPlatform==='youtube'?' YouTube':'抖音')+'视频，点击后提取内容');updateUI();}
+      if(!applyActiveTranscribeTask(taskStatus)) {
+        const source=sourceDiscoverySnapshot.source;
+        setStatus(taskStatus.statusText || (currentPlatform==='douyin'?'将总结：'+(source.title||'抖音作品 '+source.videoId):'已识别 YouTube 视频，点击后提取内容'));
+        updateUI();
+      }
       return;
     }
 

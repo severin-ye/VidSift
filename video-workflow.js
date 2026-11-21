@@ -3,9 +3,9 @@
  class VideoWorkflow{
   constructor(deps){this.deps=deps;this.tasks=new Map();}
   async assertLive(task){
-   const check=()=>{if(task.cancelled||this.tasks.get(task.tabId)!==task)throw new Error('视频处理已取消或被替代');};
+   const check=()=>{if(task.cancelled||this.tasks.get(task.taskKey??task.tabId)!==task)throw new Error('视频处理已取消或被替代');};
    check();
-   if(task.sourceClosed)return;
+   if(task.sourceClosed||task.sourceLocked)return;
    let tab;
    try{tab=await this.deps.getTab(task.tabId);}catch(e){
     if(!/No tab with id\b|标签页不存在|不存在的标签页/i.test(String(e?.message||e)))throw e;
@@ -20,37 +20,40 @@
   async start(msg,notify=()=>{}){
    const d=this.deps,tabId=msg.openerTabId,source=d.identify(msg.sourceUrl);
    if(!source)throw new Error('当前页面不是支持的视频页面');
-   if(this.tasks.has(tabId)||d.existing(tabId))throw new Error('当前视频已有任务进行中，请等待或取消');
+   const taskKey=msg.taskKey??tabId;
+   if(this.tasks.has(taskKey)||d.existing(taskKey))throw new Error('当前视频已有任务进行中，请等待或取消');
    if(msg.source?.key&&msg.source.key!==source.key)throw new Error('已采集作品与点击的视频不一致，未发送内容');
-   const task={tabId,source:{...msg.source,...source,...(msg.source?.frameUrl?{frameUrl:msg.source.frameUrl,frameId:msg.source.frameId,videoIndex:msg.source.videoIndex,pageUrl:msg.source.pageUrl}:{})},id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,summaryQueued:msg.summaryQueued===true,sourceClosed:msg.sourceClosed===true,cancelled:false,controller:new AbortController()};
-   this.tasks.set(tabId,task);d.lock(tabId,'video','正在提取视频内容...');
+   const task={tabId,taskKey,sourceLocked:msg.sourceLocked===true,source:{...msg.source,...source,...(msg.source?.frameUrl?{frameUrl:msg.source.frameUrl,frameId:msg.source.frameId,videoIndex:msg.source.videoIndex,pageUrl:msg.source.pageUrl}:{})},id:'video_'+Date.now()+'_'+Math.random().toString(36).slice(2),diagnosticId:msg.diagnosticId,summaryQueued:msg.summaryQueued===true,sourceClosed:msg.sourceClosed===true,cancelled:false,controller:new AbortController()};
+   this.tasks.set(taskKey,task);d.lock(taskKey,'video','正在提取视频内容...');
    const log=(stage,value)=>{try{d.diagnostic?.(task,stage,value);}catch{}};log('task.started');
-   const status=(type,text)=>{if(this.tasks.get(tabId)===task)d.lock(tabId,'video',text);notify(type,text);};let assets=[],localAudio,localOutcome='failed';
+   const status=(type,text)=>{if(this.tasks.get(taskKey)===task)d.lock(taskKey,'video',text);notify(type,text);};let assets=[],localAudio,localOutcome='failed';
    try{
     await this.assertLive(task);log('source.checked');task.client=d.client();log('native.connected');
     if(typeof task.client.request==='function'){try{const reply=await task.client.request('diagnostics');task.nativeCapabilities=reply.result?.capabilities||[];log('native.version',{nativeVersion:reply.result?.version||'unknown'});}catch{log('native.diagnostics_failed');}}
     let pageSource=msg.pageSource;
     if(pageSource&&String(pageSource.videoId)!==source.videoId)throw new Error('已采集作品与点击的视频不一致，未发送内容');
-    if(source.platform==='douyin'&&!pageSource&&d.snapshot&&!task.sourceClosed){
+    if(source.platform==='douyin'&&!pageSource&&d.snapshot&&!task.sourceClosed&&!task.sourceLocked){
      status('STATUS','正在读取当前抖音作品的原视频信息...');
      try{pageSource=await d.snapshot(task);}catch{pageSource=null;}
      await this.assertLive(task);
      if(!pageSource)status('STATUS','当前页面未提供完整原视频地址，改用限时解析...');
     }
     const local=msg.transcribeService==='groq'||source.platform==='douyin'&&msg.transcribeService==='local';
-    let result;
+    let result,resolvedMedia=false;
     if(local&&!d.normalize(msg.screenshotSettings).enabled&&d.loadLocalMedia){result=await d.loadLocalMedia(task,pageSource);await this.assertLive(task);if(result){log('local.media_reused');status('STATUS','已核验并复用本作品的完整音频，不重新下载');}}
     if(!result){
+     resolvedMedia=true;
      log('native.resolve');
      result=await task.client.resolve({url:msg.sourceUrl,source:{...msg.source,...pageSource},forceAudio:!!msg.forceAudio,needAudio:true,localTranscription:local,localSettings:msg.localSettings,audioSettings:d.normalizeAudio?d.normalizeAudio(msg.audioSettings):msg.audioSettings,screenshots:d.normalize(msg.screenshotSettings)},text=>{log('native.progress',{phase:/YouTube 字幕/.test(text)?'youtube_subtitle':/元数据/.test(text)?'metadata':/字幕轨道/.test(text)?'subtitle_tracks':/下载/.test(text)?'download':/压缩|编码/.test(text)?'encode':'processing'});status('STATUS',text);});
-     if(local&&result.localAudio)await d.saveLocalMedia?.(task,result,msg.localSettings);
     }
     localAudio=result.localAudio;
+    assets=[result.audio,...(result.images||[])].filter(Boolean).map(a=>a.assetId);
+    if(task.sourceLocked&&(result.platform!==source.platform||String(result.videoId)!==source.videoId))throw new Error('解析到的作品与点击时的抖音作品不一致，未发送内容');
+    if(local&&localAudio&&resolvedMedia)await d.saveLocalMedia?.(task,result,msg.localSettings);
     log('native.completed',{hasSubtitle:!!result.subtitle?.body?.length,subtitleCount:result.subtitle?.body?.length||0,hasAudio:!!result.audio,duration:result.duration,imageCount:result.images?.length||0,
      subtitleStatus:result.subtitleStatus,originalBytes:result.audioInfo?.originalBytes,outputBytes:result.audioInfo?.outputBytes,
      audioCandidateCount:result.audioInfo?.candidateCount,selectedSourceBytes:result.audioInfo?.selectedSourceBytes,
      selectedSourceBitrate:result.audioInfo?.selectedSourceBitrate,audioSourceKind:result.audioInfo?.sourceKind});
-    assets=[result.audio,...(result.images||[])].filter(Boolean).map(a=>a.assetId);
     if(result.audio&&d.normalizeAudio&&!result.audioInfo)throw new Error('本机媒体程序尚未支持音频设置，请更新到本包5.1.0本机程序后重试');
     await this.assertLive(task);
     if(d.normalize(msg.screenshotSettings).enabled && !(result.images||[]).length) throw new Error('图片提取未得到可用画面，已停止自动发送；可关闭图片提取后重试');
@@ -94,14 +97,14 @@
      const file=visualOnly?{name:context.videoId+'_material.txt',content:'本次完整视频未检测到可靠人声，没有逐字稿。请仅依据所附带时间标记的原视频画面及画面文字总结；不要把视频简介、外部资料或任何转写猜测当作视频原文。画面不清或信息不足时明确说明，不补造缺失内容。'}:{name,content:srt};
      await d.sendChatGPT({...common,file,attachments:[{...file,mime:'text/plain'},...attachments]});
     }
-    if(task.cancelled||this.tasks.get(tabId)!==task)throw new Error('视频处理已取消或被替代');
+    if(task.cancelled||this.tasks.get(taskKey)!==task)throw new Error('视频处理已取消或被替代');
     localOutcome='success';log('task.completed');status('DONE','总结请求已发送给 ChatGPT。');return {ok:true,source:context,frameInfo:result.frameInfo};
    }catch(e){log('task.failed',{category:root.VidSiftDiagnostics?.category(e)||'operation_failed',errorName:e.name});status('ERROR',e.message);throw e;}
    finally{
     if(localAudio)try{await task.client?.finishLocalAudio?.(localAudio,task.cancelled?'cancelled':localOutcome);}catch{}
     if(localAudio)try{await d.finishLocalMedia?.(task,task.cancelled?'cancelled':localOutcome);}catch{}
     try{await task.client?.release(assets);}catch{}task.client?.close();
-    if(this.tasks.get(tabId)===task){this.tasks.delete(tabId);d.unlock(tabId);}
+    if(this.tasks.get(taskKey)===task){this.tasks.delete(taskKey);d.unlock(taskKey);}
    }
   }
   cancel(tabId,reason='已在扩展中取消当前视频任务'){
