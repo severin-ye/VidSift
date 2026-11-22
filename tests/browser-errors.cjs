@@ -7,7 +7,17 @@ const report={profile,syntheticAPI:true,dailyProfileUsed:false,checks:[]};let co
 async function until(read,timeout=15000){const end=Date.now()+timeout;while(Date.now()<end){if(await read())return;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out waiting for persisted state');}
 fs.writeFileSync(path.join(art,'resource.json'),JSON.stringify({owner:'01a1c5ca',profile,purpose:'isolated extension errors/capture acceptance',cleanup:'close browser, read CLI, remove only this profile'},null,2));
 const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><form><div id="prompt-textarea" contenteditable="true"></div><input type="file" multiple><button type="button" data-testid="send-button">Send</button></form></main><script>
- window.sent=0;window.files=[];document.querySelector('input').onchange=async e=>{for(const f of e.target.files){if(new TextEncoder().encode(f.name).length>120)throw Error('filename exceeds UTF-8 limit');window.files.push({name:f.name,content:await f.text()});const d=document.createElement('div');d.className='file-tile';d.setAttribute('role','group');d.setAttribute('aria-label',f.name);d.textContent=f.name;document.querySelector('form').append(d);}history.replaceState({},'','/c/${cid}');};
+ window.sent=0;window.files=[];window.replacedAttachment=false;
+ document.querySelector('input').onchange=async e=>{for(const f of e.target.files){if(new TextEncoder().encode(f.name).length>120)throw Error('filename exceeds UTF-8 limit');window.files.push({name:f.name,content:await f.text()});const tile=document.createElement('span');tile.className='group/composer-attachment';const surface=document.createElement('button');surface.type='button';surface.className='composer-attachment-surface';surface.setAttribute('aria-label',f.name.slice(0,-4)+'(1).srt');tile.append(surface);document.querySelector('form').append(tile);}history.replaceState({},'','/c/${cid}');};
+ window.addEventListener('message',event=>{
+  if(event.data?.type!=='VIDSIFT_LIBRARY_ARM'||window.replacedAttachment)return;
+  const tile=document.querySelector('.composer-attachment-surface').parentElement;
+  const send=document.querySelector('[data-testid="send-button"]');
+  send.disabled=true;
+  const replacement=tile.cloneNode(true);
+  tile.remove();
+  setTimeout(()=>{document.querySelector('form').append(replacement);window.replacedAttachment=true;send.disabled=false;},350);
+ });
  document.querySelector('button').onclick=async()=>{const text=document.querySelector('#prompt-textarea').innerText;window.sent++;await fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify({conversation_id:'${cid}',messages:[{id:'user-message-one',author:{role:'user'},content:{parts:[text]}}]})});document.querySelector('#prompt-textarea').textContent='';};</script>`;
 (async()=>{try{
  context=await chromium.launchPersistentContext(profile,{headless:true,executablePath:process.env.VIDSIFT_BROWSER_EXE||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',args:['--disable-extensions-except='+root,'--load-extension='+root]});
@@ -30,7 +40,12 @@ const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><fo
   const taskId='capture-'+which;
   await worker.evaluate(async ({taskId,tabId})=>{await _diagnostics.begin(taskId,{sourceTabId:tabId});await _diagnostics.record(taskId,'target.registered',{targetTabId:tabId});await _videoLibrary.register({taskId,tabId,source:{url:'https://www.bilibili.com/video/BV1LtWT66EMR',title:'acceptance'},tempChat:false});}, {taskId,tabId:target.id});
   await control.evaluate(async ({taskId,tabId})=>chrome.tabs.sendMessage(tabId,{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',taskId,libraryEligible:true,videoTitle:'原视频标题🧮'.repeat(40),prompt:'acceptance prompt',file:{name:'7698527283597905202_'+'荣格红书精读'.repeat(23)+'.srt',content:'1\n00:00:00,000 --> 00:00:01,000\nfixture'},bgOpen:true,tempChat:false}),{taskId,tabId:target.id});
-  await page.waitForFunction(()=>window.sent===1,{},{timeout:20000});
+  await page.waitForFunction(()=>window.sent===1,{},{timeout:20000}).catch(async error=>{
+   report.target=await page.evaluate(()=>({sent:window.sent,replacedAttachment:window.replacedAttachment,status:[...document.querySelectorAll('body > div')].map(e=>e.innerText).find(text=>text?.includes('未自动发送'))?.slice(0,200)}));
+   throw error;
+  });
+  assert.equal(await page.evaluate(()=>window.replacedAttachment),true);
+  report.checks.push(which+': confirmed attachment with a deduplicated filename survives temporary removal and remount');
   if(old)report.checks.push('a fresh ChatGPT tab with a restored matching summary prompt still sends exactly once');
   const files=await page.evaluate(()=>window.files);assert.equal(files.length,1);assert(Buffer.byteLength(files[0].name,'utf8')<=120);assert(files[0].name.endsWith('.srt'));assert.equal(files[0].content,'1\n00:00:00,000 --> 00:00:01,000\nfixture');report.checks.push(which+': long Chinese filename fits UTF-8 budget; complete subtitle sent once');
   if(!old){await until(()=>control.evaluate(async()=>{const s=(await chrome.storage.local.get('videoLibraryState')).videoLibraryState;return s?.pending?.some(r=>r.chatgptUrl==='https://chatgpt.com/c/11111111-2222-4333-8444-555555555555');}));report.checks.push('preallocated ID verified from exact first user message and queued without URL guessing');await until(()=>renamedTitle);assert.equal(Array.from(renamedTitle).length,128);report.checks.push('real content handler renames long Unicode title within server 128-character limit without resending');}

@@ -321,16 +321,26 @@
       || document.querySelector('#upload-files');
   }
 
+  const ATTACHMENT_TILE_SELECTOR = '[class*="file-tile"][role="group"], [class~="group/composer-attachment"]';
+
   function getVisibleFileTiles() {
     const composer = findTextarea()?.closest('form') || document;
-    return Array.from(composer.querySelectorAll(
-      '[class*="file-tile"][role="group"], [class~="group/composer-attachment"]'));
+    return Array.from(composer.querySelectorAll(ATTACHMENT_TILE_SELECTOR))
+      .filter(tile => !tile.parentElement?.closest(ATTACHMENT_TILE_SELECTOR));
   }
 
   function getFileTileName(tile) {
-    return tile.getAttribute('aria-label')
-      || tile.querySelector('button.composer-attachment-surface[aria-label]')?.getAttribute('aria-label')
-      || '';
+    return (tile.querySelector('button.composer-attachment-surface[aria-label]')?.getAttribute('aria-label')
+      || tile.getAttribute('aria-label') || '').trim();
+  }
+
+  function attachmentFailed(tile) {
+    return tile.querySelector('[role="alert"], [data-state="error"], [class*="error"]')
+      || /upload failed|上传失败|无法上传/i.test(tile.textContent || '');
+  }
+
+  function attachmentReady(tile) {
+    return !tile.querySelector('[role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]');
   }
 
   // ChatGPT auto-renames a newly attached file to "name(1).ext", "name(2).ext", etc.
@@ -345,11 +355,11 @@
   }
 
   function findFileTileByName(fileName, tiles = getVisibleFileTiles()) {
-    return tiles.find(tile => {
+    const matches = tiles.filter(tile => {
       const ariaLabel = getFileTileName(tile);
-      const text = tile.textContent || '';
-      return tileNameMatches(ariaLabel, fileName) || text.includes(fileName);
-    }) || null;
+      return ariaLabel ? tileNameMatches(ariaLabel, fileName) : (tile.textContent || '').includes(fileName);
+    });
+    return matches.length === 1 ? matches[0] : null;
   }
 
   // Remove any composer tile left over from a previous (failed/stuck) attach attempt,
@@ -386,14 +396,14 @@
     for (let attempt = 0; attempt <= 50; attempt++) {
       assertNotCancelled(taskId);
       const editor = findTextarea();
-      if (location.href !== page && !allowPreparedPage?.(editor)) throw new Error('ChatGPT 已切换页面，未自动发送总结');
-      if (editor) {
-        checkDraft(editor);
-        return editor;
+      if (location.href !== page) {
+        if (!allowPreparedPage?.(editor)) throw new Error('ChatGPT 已切换页面，未自动发送总结');
+        page = location.href;
       }
+      if (editor && checkDraft(editor) !== false) return editor;
       if (attempt < 50) await new Promise(resolve => setTimeout(resolve, 200));
     }
-    throw new Error('ChatGPT 输入框在 10 秒内未就绪，未自动发送总结');
+    throw new Error('ChatGPT 输入框或附件在 10 秒内未就绪，未自动发送总结');
   }
 
   function inputPrompt(text, textarea = findTextarea()) {
@@ -484,8 +494,9 @@
     dt.items.add(file);
 
     // Snapshot existing tiles before dispatching so we only wait for NEW ones
-    const existingTiles = new Set(getVisibleFileTiles());
-    console.log('[ext] attachFile: existingTiles count=', existingTiles.size);
+    const existing = getVisibleFileTiles();
+    const existingTiles = {nodes:new Set(existing), names:new Set(existing.map(getFileTileName).filter(Boolean))};
+    console.log('[ext] attachFile: existingTiles count=', existingTiles.nodes.size);
 
     const fileInput = findFileInput();
     if (!fileInput) throw new Error('找不到支持字幕文件的上传入口');
@@ -504,7 +515,7 @@
     return existingTiles;
   }
 
-  async function attachFileWithRetry(fileName, fileContent, maxAttempts = 2, attachment, taskId) {
+  async function attachFileWithRetry(fileName, fileContent, maxAttempts = 2, attachment, taskId, assertUnedited) {
     const isSubtitle = !attachment || /text\/plain|subrip/.test(attachment.mime);
     if (isSubtitle) _subtitleState = 'processing';
     let lastError = null;
@@ -514,14 +525,16 @@
       assertNotCancelled(taskId);
       attemptsMade = attempt;
       try {
+        assertUnedited?.();
         console.log('[ext] attachFileWithRetry: starting attempt', attempt, 'of', maxAttempts);
         const existingTiles = await attachFile(fileName, fileContent, attachment);
         await new Promise(r => setTimeout(r, 3000)); // ChatGPT may enable the button prematurely; wait before checking
-        const receipt = await waitForFileAttachment(fileName, existingTiles, taskId);
+        const receipt = await waitForFileAttachment(fileName, existingTiles, taskId, assertUnedited);
         if (isSubtitle) _subtitleState = 'confirmed';
         console.log('[ext] attachFileWithRetry: upload succeeded on attempt', attempt);
         return receipt;
       } catch (e) {
+        assertUnedited?.();
         if (taskId && cancelledTasks.has(taskId)) { e.retryable = false; }
         lastError = e;
         if (isSubtitle) _subtitleState = e.retryable ? 'failed' : 'uncertain';
@@ -550,8 +563,8 @@
   // NOTE: behavior-btn appears immediately on tile creation, NOT after upload completes,
   // so it cannot be used as an upload-success signal.
   //
-  // existingTiles: Set of tile elements already in the DOM before this upload started.
-  function waitForFileAttachment(fileName, existingTiles = new Set(), taskId) {
+  // Snapshot both names and nodes so a repaint does not turn a previous upload into this one.
+  function waitForFileAttachment(fileName, existingTiles = {nodes:new Set(), names:new Set()}, taskId, assertUnedited) {
     return new Promise((resolve, reject) => {
       let attempts = 0;
       let newFileTile = null;
@@ -572,10 +585,12 @@
       const timer = setInterval(() => {
         attempts++;
         if (taskId && cancelledTasks.has(taskId)) { fail('任务已取消，未自动发送', false); return; }
+        try { assertUnedited?.(); }
+        catch (error) { fail(error.message, false); return; }
         if (attempts >= maxAttempts || Date.now() >= deadline) { fail('附件上传等待超过 5 分钟；为避免重复文件，已停止自动重试', false); return; }
         const btn = findSendButton();
         const allTiles = getVisibleFileTiles();
-        const newTiles = allTiles.filter(t => !existingTiles.has(t));
+        const newTiles = allTiles.filter(t => !existingTiles.nodes.has(t) && !existingTiles.names.has(getFileTileName(t)));
         if (!newFileTile || !allTiles.includes(newFileTile)) {
           newFileTile = findFileTileByName(fileName, newTiles) || newFileTile;
         }
@@ -597,15 +612,15 @@
         }
 
         // A visible failure blocks send even when ChatGPT enables its button.
-        if (tileStillPresent && (newFileTile.querySelector('[role="alert"], [data-state="error"], [class*="error"]') || /upload failed|上传失败|无法上传/i.test(newFileTile.textContent || ''))) {
+        if (tileStillPresent && attachmentFailed(newFileTile)) {
           fail('附件上传失败，请重试', true); return;
         }
-        if (tileStillPresent && newFileTile.querySelector('[role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]')) return;
+        if (tileStillPresent && (!attachmentReady(newFileTile) || !tileNameMatches(getFileTileName(newFileTile), fileName))) return;
         // Send button enabled and this new file remains without processing/error indicators.
         if ((btn && !btn.disabled) || (tileStillPresent && !readComposerText().trim())) {
           if (tileStillPresent) {
             clearInterval(timer);
-            console.log('[ext] waitForFileAttachment: upload success, tile=', newFileTile.getAttribute('aria-label'));
+            console.log('[ext] waitForFileAttachment: upload confirmed');
             resolve(newFileTile);
           } else if (newFileTile) {
             console.warn('[ext] waitForFileAttachment: send button enabled but file tile is gone → upload failed');
@@ -928,8 +943,13 @@
         let titleTimer = null, libraryBinding = null, generation = null, submitted = false;
         let targetPage = location.href;
         let draftForm, draftText, previousDraft, userEdited = false;
+        const editEvents = ['beforeinput', 'change', 'drop', 'paste', 'click'];
         function observeUserEdit(event) {
-          if (event.isTrusted && event.target.closest?.('form') === draftForm) userEdited = true;
+          if (event.isTrusted && event.target.closest?.('form') === draftForm
+              && (event.type !== 'click' || event.target.closest?.(ATTACHMENT_TILE_SELECTOR))) userEdited = true;
+        }
+        function assertUnedited() {
+          if (userEdited) throw new Error('ChatGPT 输入区已有手动操作，已保留草稿和附件，未自动发送总结');
         }
         function clearUnsentPrompt() {
           const editor = findTextarea();
@@ -964,7 +984,7 @@
           const expected = normalize(prompt);
           const canReuseDraft = attachments.length > 0 && !_lastConversationTask.initialId && new URL(targetPage).pathname === '/';
           function checkDraft(editor) {
-            if (userEdited) throw new Error('ChatGPT 输入框已有手动编辑，已保留草稿，未自动发送总结');
+            assertUnedited();
             const text = normalize(readComposerText(editor));
             if (text && !(canReuseDraft && (text === base || text === expected))) {
               throw new Error('ChatGPT 输入框已有内容，已保留草稿，未自动发送总结');
@@ -973,7 +993,7 @@
           const editor = await waitForComposer(msg.taskId, targetPage, checkDraft);
           const uploadForm = editor.closest('form');
           draftForm = uploadForm;
-          window.addEventListener('beforeinput', observeUserEdit, true);
+          for (const event of editEvents) window.addEventListener(event, observeUserEdit, true);
           _lastConversationTask.recoveryEditor = editor;
           _lastConversationTask.recoveryPrompt = prompt;
           const subtitle = attachments.find(a => a.content !== undefined);
@@ -982,29 +1002,37 @@
             showRetryRenameButton(null, conversationTitle);
           }
           showStatus('正在等待文件上传...');
-          const receipts = [];
+          const receiptNames = new Set();
           const verifyAttachments = () => {
             const visible = getVisibleFileTiles();
-            if (visible.some(tile => !receipts.includes(tile))) {
+            const named = visible.map(getFileTileName).filter(Boolean);
+            if (visible.length > receiptNames.size || new Set(named).size !== named.length
+                || named.some(name => !receiptNames.has(name))) {
               throw new Error('ChatGPT 输入区已有其他附件，已保留附件，未自动发送总结');
             }
-            for (const tile of receipts) {
-              if (!visible.includes(tile) || tile.querySelector('[role="alert"], [data-state="error"], [class*="error"], [role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]')) throw new Error('附件状态已改变，未自动发送');
-            }
+            if (visible.some(attachmentFailed)) throw new Error('本次附件上传失败，未自动发送总结');
+            return named.length === receiptNames.size && visible.every(attachmentReady);
           };
+          function checkComposer(editor) {
+            checkDraft(editor);
+            if (editor.closest('form') !== uploadForm) throw new Error('ChatGPT 已切换输入区，未自动发送总结');
+            return verifyAttachments();
+          }
           function allowPreparedPage(editor) {
-            // ChatGPT can allocate a conversation URL during upload while keeping the same composer.
+            // ChatGPT may allocate the URL and redraw the cards before the same form is ready.
             if (msg.tempChat || new URL(targetPage).pathname !== '/' || !getConversationIdFromUrl()
-                || !receipts.length || editor?.closest('form') !== uploadForm) return false;
-            const visible = getVisibleFileTiles();
-            if (!receipts.every(tile => visible.includes(tile))) return false;
+                || !receiptNames.size || editor?.closest('form') !== uploadForm) return false;
             targetPage = location.href;
             return true;
           }
           for (const attachment of attachments) {
-            await waitForComposer(msg.taskId, targetPage, checkDraft, allowPreparedPage);
-            verifyAttachments();
-            receipts.push(await attachFileWithRetry(attachment.name, attachment.content, 2, attachment, msg.taskId));
+            await waitForComposer(msg.taskId, targetPage, checkComposer, allowPreparedPage);
+            const tile = await attachFileWithRetry(attachment.name, attachment.content, 2, attachment, msg.taskId, assertUnedited);
+            const name = getFileTileName(tile);
+            if (!tileNameMatches(name, attachment.name) || receiptNames.has(name)) {
+              throw new Error('无法唯一确认本次上传的附件，未自动发送总结');
+            }
+            receiptNames.add(name);
           }
           console.log('[ext] CHATGPT_PREPARE_PROMPT: file attached successfully, proceeding to send');
           showStatus('正在发送...');
@@ -1014,9 +1042,7 @@
             await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
           }
           const temporaryFinished=msg.tempChat&&msg.awaitGeneration?createTemporaryGenerationTracker():null;
-          const draftEditor = await waitForComposer(msg.taskId, targetPage, checkDraft, allowPreparedPage);
-          verifyAttachments();
-          draftForm = draftEditor.closest('form');
+          const draftEditor = await waitForComposer(msg.taskId, targetPage, checkComposer, allowPreparedPage);
           const existing = readComposerText(draftEditor);
           if (normalize(existing) !== expected) {
             previousDraft = existing;
@@ -1030,13 +1056,13 @@
           }
           await clickSend(msg.taskId, editor => {
             if (location.href !== targetPage) throw new Error('ChatGPT 已切换页面，未自动发送总结');
-            if (userEdited) throw new Error('ChatGPT 输入框已有手动编辑，已保留草稿，未自动发送总结');
+            assertUnedited();
             if (!editor) return false;
             if (editor.closest('form') !== draftForm) throw new Error('ChatGPT 已切换输入区，未自动发送总结');
             const observed = normalize(readComposerText(editor));
             if (!observed && expected) return false;
             if (observed !== expected) throw new Error('ChatGPT 输入框内容已改变，已保留草稿，未自动发送总结');
-            verifyAttachments();
+            return verifyAttachments();
           });
           submitted=true;
           _lastConversationTask.submitted=true;
@@ -1090,7 +1116,7 @@
           showError(`${bvidPrefix}${e.message}`);
         } finally {
           window.removeEventListener('pagehide', clearUnsentPrompt);
-          window.removeEventListener('beforeinput', observeUserEdit, true);
+          for (const event of editEvents) window.removeEventListener(event, observeUserEdit, true);
           try { clearUnsentPrompt(); }
           finally { if(generation)await generation;libraryBinding?.stop(); _taskActive = false; }
         }
