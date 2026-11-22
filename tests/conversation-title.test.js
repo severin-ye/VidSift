@@ -22,26 +22,44 @@ test('blank or metadata-only title uses source identity and never metadata as fa
  assert.equal(format('#知识'), '');
 });
 const content=fs.readFileSync('chatgpt-content.js','utf8');
-async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=false,uploadError,sendError,initialDraft='',draftDuringUpload}={}){
- let sent=0, draftAtUpload, failure;const renames=[],retries=[],timers=[];
- const editor={text:initialDraft};
+async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=false,uploadError,sendError,initialDraft='',draftDuringUpload,lateEditor=false,changeBeforeSend,preparePage}={}){
+ let sent=0, draftAtUpload, failure, beforeInput;const renames=[],retries=[],timers=[];
+ const form={};
+ let editor={text:initialDraft,closest:()=>form};
+ let missing=lateEditor;
  const tile={querySelector:()=>null};
  const c={msg:{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',videoTitle:title,source,bvid,tempChat,taskId:'task',file:{name:'original.srt',content:'subtitle'}},
   VidSiftConversationTitle:{formatConversationTitle:format},_taskActive:false,globalThis:null,Date,console:{log(){},error(){},warn(){}},
-  getConversationIdFromUrl:()=>null,sendResponse(){},document:{title:''},setInterval(fn){timers.push(fn);return 1;},clearInterval(){},
-  VidSiftAttachments:{normalizeMessage:m=>[m.file],contextualPrompt:prompt=>prompt},showSaveButton(){},showRetryRenameButton:(id,title)=>retries.push({id,title}),showStatus(){},findTextarea:()=>editor,inputPrompt:text=>{editor.text=text;},readComposerText:()=>editor.text,loadPrompt:async()=>'synthetic video prompt',assertNotCancelled(){},attachFileWithRetry:async()=>{
+  URL,getConversationIdFromUrl:()=>c.location.href.includes('/c/')?'11111111-2222-4333-8444-555555555555':null,
+  sendResponse(){},document:{title:''},setInterval(fn){timers.push(fn);return 1;},clearInterval(){},
+  VidSiftConversationBinding:require('../conversation-binding'),setTimeout(fn){missing=false;queueMicrotask(fn);},
+  VidSiftAttachments:{normalizeMessage:m=>[m.file],contextualPrompt:prompt=>prompt},showSaveButton(){},showRetryRenameButton:(id,title)=>retries.push({id,title}),showStatus(){},findTextarea:()=>missing?null:editor,inputPrompt:(text,target)=>{target.text=text;},readComposerText:target=>target?.text??'',loadPrompt:async()=>'synthetic video prompt',assertNotCancelled(){},attachFileWithRetry:async()=>{
    draftAtUpload=editor.text;
    if(draftDuringUpload!==undefined)editor.text=draftDuringUpload;
    if(uploadError)throw Error(uploadError);
+   if(preparePage)c.location.href+='c/11111111-2222-4333-8444-555555555555';
+   if(preparePage==='other-form')editor={...editor,closest:()=>({})};
    return tile;
   },
   getVisibleFileTiles:()=>[tile],
-  window:{addEventListener(){},removeEventListener(){}},location:{href:'https://chatgpt.com/'},
-  captureSubmittedConversation:()=>({ready:Promise.resolve(),promise:Promise.resolve(id),stop(){}}),clickSend:async()=>{if(sendError)throw Error(sendError);sent++;editor.text='';},reportTarget:(msg,ok,error)=>{if(!ok)failure=error;},hideSaveButton(){},scrollToResponseOnTabFocus(){},hideStatus(){},showError(){},hideRetryRenameButton(){},
+  window:{addEventListener(type,handler){if(type==='beforeinput')beforeInput=handler;},removeEventListener(){}},location:{href:'https://chatgpt.com/'},
+  captureSubmittedConversation:()=>({ready:Promise.resolve(),promise:Promise.resolve(id),stop(){}}),clickSend:async(taskId,verify)=>{
+   if(sendError)throw Error(sendError);
+   if(changeBeforeSend==='remount')editor={...editor,text:'synthetic\u00a0video prompt'};
+   if(changeBeforeSend==='draft')editor.text='my own draft';
+   if(changeBeforeSend==='user-spacing'){
+    beforeInput?.({isTrusted:true,target:editor});
+    editor.text='synthetic  video prompt';
+   }
+   if(changeBeforeSend==='navigate')c.location.href+='c/other';
+   assert.notEqual(verify(editor),false);
+   sent++;editor.text='';
+  },reportTarget:(msg,ok,error)=>{if(!ok)failure=error;},hideSaveButton(){},scrollToResponseOnTabFocus(){},hideStatus(){},showError(){},hideRetryRenameButton(){},
   renameConversationViaAPI:async(id,title)=>{renames.push({id,title});return !pending;},showFailedAttachmentRetry(){},chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
  c.globalThis=c;vm.createContext(c);
+ const helpers=content.match(/  async function waitForEmptyComposer[\s\S]+?(?=\n  function inputPrompt)/)?.[0]??'';
  const handler=content.slice(content.indexOf("    if (msg.type === 'VIDSIFT_CHATGPT_PREPARE_PROMPT')"),content.indexOf("    if (msg.type === 'EXT_STATUS')"));
- vm.runInContext('(function(){'+handler+'})();',c);
+ vm.runInContext('(function(){'+helpers+handler+'})();',c);
  for(let n=0;n<30&&c._taskActive;n++)await new Promise(setImmediate);
  assert.equal(c._taskActive,false);return {sent,renames,retries,title:c.document.title,draftAtUpload,draft:editor.text,failure};
 }
@@ -64,6 +82,28 @@ test('ChatGPT preserves user drafts present before or written during the upload'
   assert.equal(result.draft,'my own draft');
   assert.equal(result.sent,0);
  }
+});
+test('ChatGPT waits for the real editor when it disappears between readiness and handoff',async()=>{
+ const result=await run({tempChat:true,lateEditor:true});
+ assert.equal(result.sent,1,result.failure);
+ assert.equal(result.draftAtUpload,'');
+});
+test('ChatGPT sends once when the same form remounts the editor with the same prompt',async()=>{
+ const result=await run({tempChat:true,changeBeforeSend:'remount'});
+ assert.equal(result.sent,1,result.failure);
+});
+test('ChatGPT accepts an allocated conversation URL only with the original upload form and receipt',async()=>{
+ assert.equal((await run({preparePage:'same-form'})).sent,1);
+ assert.equal((await run({preparePage:'other-form'})).sent,0);
+});
+test('ChatGPT never sends or clears a replacement user draft or sends on a different page',async()=>{
+ const drafted=await run({tempChat:true,changeBeforeSend:'draft'});
+ assert.equal(drafted.sent,0);
+ assert.equal(drafted.draft,'my own draft');
+ assert.equal((await run({tempChat:true,changeBeforeSend:'navigate'})).sent,0);
+ const edited=await run({tempChat:true,changeBeforeSend:'user-spacing'});
+ assert.equal(edited.sent,0);
+ assert.equal(edited.draft,'synthetic  video prompt');
 });
 test('actual modern GPT handler sends once and uses same formatted title for pending retry',async()=>{
  const result=await run({source:{platform:'douyin',title:raw,videoId:'123'},pending:true});

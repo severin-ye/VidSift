@@ -29,7 +29,7 @@ document.querySelector('button').onclick=async()=>{const text=document.querySele
   return route.fulfill({contentType:'text/html',body:html});
  });
  const warm=await context.newPage();await warm.goto('https://chatgpt.com/');await warm.evaluate(async()=>{await navigator.serviceWorker.register('/fixture-worker.js');await navigator.serviceWorker.ready;});await warm.close();
- control=await context.newPage();await control.goto('chrome-extension://'+id+'/options.html');
+ control=await context.newPage();await control.goto('chrome-extension://'+id+'/popup.html');
  worker=context.serviceWorkers().find(w=>w.url().startsWith('chrome-extension://'))||await context.waitForEvent('serviceworker');
  await worker.evaluate(()=>{
   const realFetch=fetch;globalThis.fetch=async(url,options)=>{
@@ -47,20 +47,22 @@ document.querySelector('button').onclick=async()=>{const text=document.querySele
  await control.evaluate(async()=>{
   window.notes=[];window.ports=[];const tabs=(await chrome.tabs.query({})).filter(t=>t.url?.includes('/video/BVtest'));
   for(const tab of tabs){const p=chrome.runtime.connect({name:'vidsift-video'});ports.push(p);p.onMessage.addListener(m=>notes.push({source:tab.id,...m}));p.postMessage({type:'START_VIDEO_TASK',sourceUrl:tab.url,openerTabId:tab.id,source:{},bgOpen:true,tempChat:false,screenshotSettings:{enabled:false}});}
-  await chrome.tabs.remove(tabs.map(t=>t.id));
  });
+ await until(()=>control.evaluate(()=>notes.filter(note=>note.type==='ACCEPTED').length===3));
+ await a.close();await c.close();
  await until(()=>sends===1);await new Promise(r=>setTimeout(r,1200));
  assert.equal(sends,1,'second job must wait beyond send acknowledgement and generated title');
  assert.equal(await worker.evaluate(()=>_summaryQueue.length),3);
- assert.equal((await control.evaluate(()=>chrome.tabs.query({}))).filter(t=>t.url?.includes('/video/BVtest')).length,0);
- report.checks.push('three source tabs closed immediately after submission; first summary sends once','later summaries remain queued while first has generated title but unfinished response');
+ assert.deepEqual((await control.evaluate(()=>chrome.tabs.query({}))).filter(t=>t.url?.includes('/video/BVtest')).map(t=>t.url.split('/').at(-1)),['BVtestB']);
+ report.checks.push('first and third source tabs closed after acceptance; first summary sends once','later summaries remain queued while first has generated title but unfinished response');
  failed.add([...conversations.keys()][0]);await until(()=>sends===2);assert.equal(sends,2);
  finished.add([...conversations.keys()][1]);await until(()=>sends===3);
  for(const cid of conversations.keys())finished.add(cid);
  await until(()=>worker.evaluate(()=>_summaryQueue.length===0));
  const notes=await control.evaluate(()=>window.notes);assert.equal(notes.filter(n=>n.type==='ERROR').length,1,JSON.stringify(notes));assert.match(notes.find(n=>n.type==='ERROR').text,/生成失败/);assert.equal(notes.filter(n=>n.type==='DONE').length,2);assert.equal(notes.filter(n=>n.type==='ACCEPTED').length,3);
+ assert.equal(b.isClosed(),false);
  const registered=await worker.evaluate(()=>libraryRegistrations);assert.equal(registered.length,3);for(const task of registered)assert.equal(task.source.coverUrl,'https://i1.hdslb.com/'+task.source.videoId+'.jpg@640w_360h_1c.jpg');
- report.checks.push('explicit first generation failure releases second job without resend','second generation completion releases third job','all three closed-source summaries retain the matching normalized cover at library registration');
+ report.checks.push('explicit first generation failure releases second job without resend','second generation completes with source open and releases third job','all three summaries retain the matching normalized cover at library registration');
  report.passed=true;
 }catch(error){report.notifications=await control?.evaluate(()=>window.notes).catch(()=>[]);report.targets=await control?.evaluate(()=>chrome.tabs.query({})).then(tabs=>tabs.map(t=>({id:t.id,url:t.url,title:t.title}))).catch(()=>[]);report.queue=await worker?.evaluate(()=>_summaryQueue.map(j=>({id:j.task?.id,status:j.task?.statusText,cancelled:j.task?.cancelled}))).catch(()=>[]);report.error=error.stack;process.exitCode=1;}finally{
  if(context)await context.close();report.contextClosed=true;
