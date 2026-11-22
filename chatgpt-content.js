@@ -382,13 +382,13 @@
     return {ready:false};
   }
 
-  async function waitForEmptyComposer(taskId, page, allowPreparedPage) {
+  async function waitForComposer(taskId, page, checkDraft, allowPreparedPage) {
     for (let attempt = 0; attempt <= 50; attempt++) {
       assertNotCancelled(taskId);
       const editor = findTextarea();
       if (location.href !== page && !allowPreparedPage?.(editor)) throw new Error('ChatGPT 已切换页面，未自动发送总结');
       if (editor) {
-        if (readComposerText(editor).trim()) throw new Error('ChatGPT 输入框已有内容，已保留草稿，未自动发送总结');
+        checkDraft(editor);
         return editor;
       }
       if (attempt < 50) await new Promise(resolve => setTimeout(resolve, 200));
@@ -927,16 +927,16 @@
       (async () => {
         let titleTimer = null, libraryBinding = null, generation = null, submitted = false;
         let targetPage = location.href;
-        let draftForm, draftText, userEdited = false;
+        let draftForm, draftText, previousDraft, userEdited = false;
         function observeUserEdit(event) {
           if (event.isTrusted && event.target.closest?.('form') === draftForm) userEdited = true;
         }
         function clearUnsentPrompt() {
           const editor = findTextarea();
-          if (!submitted && !userEdited && draftText && location.href === targetPage
+          if (!submitted && !userEdited && previousDraft !== undefined && draftText && location.href === targetPage
               && editor?.closest('form') === draftForm
               && VidSiftConversationBinding.normalize(readComposerText(editor)) === VidSiftConversationBinding.normalize(draftText)) {
-            inputPrompt('', editor);
+            inputPrompt(previousDraft, editor);
           }
         }
         const conversationTitle = VidSiftConversationTitle.formatConversationTitle(msg.videoTitle, {...msg.source, videoId:msg.source?.videoId||msg.bvid});
@@ -956,10 +956,24 @@
           }, 200);
         }
         try {
-          const editor = await waitForEmptyComposer(msg.taskId, targetPage);
-          const uploadForm = editor.closest('form');
           const attachments = VidSiftAttachments.normalizeMessage(msg);
-          const prompt = VidSiftAttachments.contextualPrompt(msg.prompt ?? await loadPrompt(), attachments, msg.source?.url || msg.sourceUrl || msg.bvid || msg.videoTitle);
+          const basePrompt = msg.prompt ?? await loadPrompt();
+          const prompt = VidSiftAttachments.contextualPrompt(basePrompt, attachments, msg.source?.url || msg.sourceUrl || msg.bvid || msg.videoTitle);
+          const normalize = VidSiftConversationBinding.normalize;
+          const base = normalize(basePrompt);
+          const expected = normalize(prompt);
+          const canReuseDraft = attachments.length > 0 && !_lastConversationTask.initialId && new URL(targetPage).pathname === '/';
+          function checkDraft(editor) {
+            if (userEdited) throw new Error('ChatGPT 输入框已有手动编辑，已保留草稿，未自动发送总结');
+            const text = normalize(readComposerText(editor));
+            if (text && !(canReuseDraft && (text === base || text === expected))) {
+              throw new Error('ChatGPT 输入框已有内容，已保留草稿，未自动发送总结');
+            }
+          }
+          const editor = await waitForComposer(msg.taskId, targetPage, checkDraft);
+          const uploadForm = editor.closest('form');
+          draftForm = uploadForm;
+          window.addEventListener('beforeinput', observeUserEdit, true);
           _lastConversationTask.recoveryEditor = editor;
           _lastConversationTask.recoveryPrompt = prompt;
           const subtitle = attachments.find(a => a.content !== undefined);
@@ -969,6 +983,15 @@
           }
           showStatus('正在等待文件上传...');
           const receipts = [];
+          const verifyAttachments = () => {
+            const visible = getVisibleFileTiles();
+            if (visible.some(tile => !receipts.includes(tile))) {
+              throw new Error('ChatGPT 输入区已有其他附件，已保留附件，未自动发送总结');
+            }
+            for (const tile of receipts) {
+              if (!visible.includes(tile) || tile.querySelector('[role="alert"], [data-state="error"], [class*="error"], [role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]')) throw new Error('附件状态已改变，未自动发送');
+            }
+          };
           function allowPreparedPage(editor) {
             // ChatGPT can allocate a conversation URL during upload while keeping the same composer.
             if (msg.tempChat || new URL(targetPage).pathname !== '/' || !getConversationIdFromUrl()
@@ -979,7 +1002,8 @@
             return true;
           }
           for (const attachment of attachments) {
-            await waitForEmptyComposer(msg.taskId, targetPage, allowPreparedPage);
+            await waitForComposer(msg.taskId, targetPage, checkDraft, allowPreparedPage);
+            verifyAttachments();
             receipts.push(await attachFileWithRetry(attachment.name, attachment.content, 2, attachment, msg.taskId));
           }
           console.log('[ext] CHATGPT_PREPARE_PROMPT: file attached successfully, proceeding to send');
@@ -990,22 +1014,18 @@
             await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
           }
           const temporaryFinished=msg.tempChat&&msg.awaitGeneration?createTemporaryGenerationTracker():null;
-          const verifyAttachments = () => {
-            const visible = getVisibleFileTiles();
-            for (const tile of receipts) {
-              if (!visible.includes(tile) || tile.querySelector('[role="alert"], [data-state="error"], [class*="error"], [role="progressbar"], [aria-busy="true"], [class*="spinner"], [class*="loading"]')) throw new Error('附件状态已改变，未自动发送');
-            }
-          };
-          const draftEditor = await waitForEmptyComposer(msg.taskId, targetPage, allowPreparedPage);
+          const draftEditor = await waitForComposer(msg.taskId, targetPage, checkDraft, allowPreparedPage);
           verifyAttachments();
           draftForm = draftEditor.closest('form');
-          inputPrompt(prompt, draftEditor);
+          const existing = readComposerText(draftEditor);
+          if (normalize(existing) !== expected) {
+            previousDraft = existing;
+            inputPrompt(prompt, draftEditor);
+          }
           draftText = readComposerText(draftEditor);
           _lastConversationTask.expectedText = draftText;
           window.addEventListener('pagehide', clearUnsentPrompt);
-          window.addEventListener('beforeinput', observeUserEdit, true);
-          const expected = VidSiftConversationBinding.normalize(prompt);
-          if (VidSiftConversationBinding.normalize(draftText) !== expected) {
+          if (normalize(draftText) !== expected) {
             throw new Error('ChatGPT 未完整接收本次提示词，未自动发送总结');
           }
           await clickSend(msg.taskId, editor => {
@@ -1013,7 +1033,7 @@
             if (userEdited) throw new Error('ChatGPT 输入框已有手动编辑，已保留草稿，未自动发送总结');
             if (!editor) return false;
             if (editor.closest('form') !== draftForm) throw new Error('ChatGPT 已切换输入区，未自动发送总结');
-            const observed = VidSiftConversationBinding.normalize(readComposerText(editor));
+            const observed = normalize(readComposerText(editor));
             if (!observed && expected) return false;
             if (observed !== expected) throw new Error('ChatGPT 输入框内容已改变，已保留草稿，未自动发送总结');
             verifyAttachments();

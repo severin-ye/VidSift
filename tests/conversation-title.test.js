@@ -22,26 +22,28 @@ test('blank or metadata-only title uses source identity and never metadata as fa
  assert.equal(format('#知识'), '');
 });
 const content=fs.readFileSync('chatgpt-content.js','utf8');
-async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=false,uploadError,sendError,initialDraft='',draftDuringUpload,lateEditor=false,changeBeforeSend,preparePage}={}){
- let sent=0, draftAtUpload, failure, beforeInput;const renames=[],retries=[],timers=[];
+async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=false,uploadError,sendError,initialDraft='',draftDuringUpload,lateEditor=false,changeBeforeSend,preparePage,oldAttachment=false,promptSuffix=''}={}){
+ let sent=0, draftAtUpload, failure, beforeInput, sentText;const renames=[],retries=[],timers=[];
  const form={};
  let editor={text:initialDraft,closest:()=>form};
  let missing=lateEditor;
  const tile={querySelector:()=>null};
+ const tiles=oldAttachment?[{querySelector:()=>null}]:[];
  const c={msg:{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',videoTitle:title,source,bvid,tempChat,taskId:'task',file:{name:'original.srt',content:'subtitle'}},
   VidSiftConversationTitle:{formatConversationTitle:format},_taskActive:false,globalThis:null,Date,console:{log(){},error(){},warn(){}},
   URL,getConversationIdFromUrl:()=>c.location.href.includes('/c/')?'11111111-2222-4333-8444-555555555555':null,
   sendResponse(){},document:{title:''},setInterval(fn){timers.push(fn);return 1;},clearInterval(){},
   VidSiftConversationBinding:require('../conversation-binding'),setTimeout(fn){missing=false;queueMicrotask(fn);},
-  VidSiftAttachments:{normalizeMessage:m=>[m.file],contextualPrompt:prompt=>prompt},showSaveButton(){},showRetryRenameButton:(id,title)=>retries.push({id,title}),showStatus(){},findTextarea:()=>missing?null:editor,inputPrompt:(text,target)=>{target.text=text;},readComposerText:target=>target?.text??'',loadPrompt:async()=>'synthetic video prompt',assertNotCancelled(){},attachFileWithRetry:async()=>{
+  VidSiftAttachments:{normalizeMessage:m=>[m.file],contextualPrompt:prompt=>prompt+promptSuffix},showSaveButton(){},showRetryRenameButton:(id,title)=>retries.push({id,title}),showStatus(){},findTextarea:()=>missing?null:editor,inputPrompt:(text,target)=>{target.text=text;},readComposerText:target=>target?.text??'',loadPrompt:async()=>'synthetic video prompt',assertNotCancelled(){},attachFileWithRetry:async()=>{
    draftAtUpload=editor.text;
    if(draftDuringUpload!==undefined)editor.text=draftDuringUpload;
    if(uploadError)throw Error(uploadError);
    if(preparePage)c.location.href+='c/11111111-2222-4333-8444-555555555555';
    if(preparePage==='other-form')editor={...editor,closest:()=>({})};
+   tiles.push(tile);
    return tile;
   },
-  getVisibleFileTiles:()=>[tile],
+  getVisibleFileTiles:()=>tiles,
   window:{addEventListener(type,handler){if(type==='beforeinput')beforeInput=handler;},removeEventListener(){}},location:{href:'https://chatgpt.com/'},
   captureSubmittedConversation:()=>({ready:Promise.resolve(),promise:Promise.resolve(id),stop(){}}),clickSend:async(taskId,verify)=>{
    if(sendError)throw Error(sendError);
@@ -53,15 +55,15 @@ async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=fals
    }
    if(changeBeforeSend==='navigate')c.location.href+='c/other';
    assert.notEqual(verify(editor),false);
-   sent++;editor.text='';
+   sent++;sentText=editor.text;editor.text='';
   },reportTarget:(msg,ok,error)=>{if(!ok)failure=error;},hideSaveButton(){},scrollToResponseOnTabFocus(){},hideStatus(){},showError(){},hideRetryRenameButton(){},
   renameConversationViaAPI:async(id,title)=>{renames.push({id,title});return !pending;},showFailedAttachmentRetry(){},chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
  c.globalThis=c;vm.createContext(c);
- const helpers=content.match(/  async function waitForEmptyComposer[\s\S]+?(?=\n  function inputPrompt)/)?.[0]??'';
+ const helpers=content.match(/  async function waitFor(?:Empty)?Composer[\s\S]+?(?=\n  function inputPrompt)/)?.[0]??'';
  const handler=content.slice(content.indexOf("    if (msg.type === 'VIDSIFT_CHATGPT_PREPARE_PROMPT')"),content.indexOf("    if (msg.type === 'EXT_STATUS')"));
  vm.runInContext('(function(){'+helpers+handler+'})();',c);
  for(let n=0;n<30&&c._taskActive;n++)await new Promise(setImmediate);
- assert.equal(c._taskActive,false);return {sent,renames,retries,title:c.document.title,draftAtUpload,draft:editor.text,failure};
+ assert.equal(c._taskActive,false);return {sent,sentText,renames,retries,title:c.document.title,draftAtUpload,draft:editor.text,failure};
 }
 test('ChatGPT leaves the composer blank while uploading and after an upload fails',async()=>{
  const result=await run({tempChat:true,uploadError:'upload failed'});
@@ -81,6 +83,23 @@ test('ChatGPT preserves user drafts present before or written during the upload'
   const result=await run({tempChat:true,...options});
   assert.equal(result.draft,'my own draft');
   assert.equal(result.sent,0);
+ }
+});
+test('ChatGPT resumes with the complete restored summary prompt and sends only new attachments',async()=>{
+ const initialDraft='synthetic video prompt';
+ const resumed=await run({initialDraft,tempChat:false});
+ assert.equal(resumed.sent,1,resumed.failure);
+ assert.equal(resumed.draftAtUpload,initialDraft);
+ assert.equal(resumed.sentText,initialDraft);
+ const pictured=await run({initialDraft,promptSuffix:' with current images'});
+ assert.equal(pictured.sentText,initialDraft+' with current images');
+ const failed=await run({initialDraft,promptSuffix:' with current images',sendError:'send failed'});
+ assert.equal(failed.draft,initialDraft);
+ for(const options of [{initialDraft:initialDraft+' plus private notes'},{initialDraft,oldAttachment:true}]){
+  const blocked=await run(options);
+  assert.equal(blocked.sent,0);
+  assert.equal(blocked.draftAtUpload,undefined);
+  assert.equal(blocked.draft,options.initialDraft);
  }
 });
 test('ChatGPT waits for the real editor when it disappears between readiness and handoff',async()=>{
