@@ -22,8 +22,18 @@ test('blank or metadata-only title uses source identity and never metadata as fa
  assert.equal(format('#知识'), '');
 });
 const content=fs.readFileSync('chatgpt-content.js','utf8');
+test('manual attachment retry offers copying the prompt without writing to the composer',()=>{
+ const task={taskId:'task',recoveryEditor:{},recoveryPrompt:'private prompt'};
+ const shown=[];
+ const c=vm.createContext({task,_lastConversationTask:task,cancelledTasks:new Set(),
+  findTextarea:()=>task.recoveryEditor,inputPrompt:()=>assert.fail('manual retry must not write a draft'),
+  showStatus:(text,prompt)=>shown.push(prompt)});
+ const helper=content.match(/  function showManualUploadReady[\s\S]+?(?=\n  function showFailedAttachmentRetry)/)?.[0]??'';
+ vm.runInContext(helper+'\nshowManualUploadReady(task);',c);
+ assert.deepEqual(shown,['private prompt']);
+});
 async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=false,uploadError,sendError,initialDraft='',draftDuringUpload,lateEditor=false,changeBeforeSend,preparePage,oldAttachment=false,promptSuffix='',attachName='original.srt',beforeSendAttachments}={}){
- let sent=0, draftAtUpload, failure, beforeInput, sentText;const renames=[],retries=[],timers=[];
+ let sent=0, draftAtUpload, draftWhileWaitingForSend, failure, beforeInput, sentText;const renames=[],retries=[],timers=[];
  const form={};
  let editor={text:initialDraft,closest:()=>form};
  let missing=lateEditor;
@@ -53,7 +63,15 @@ async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=fals
   captureSubmittedConversation:()=>{
    if(preparePage==='pending-card')tiles.length=0;
    return {ready:Promise.resolve(),promise:Promise.resolve(id),stop(){}};
-  },clickSend:async(taskId,verify)=>{
+  },clickSend:async(taskId,verify,prepare)=>{
+   draftWhileWaitingForSend=editor.text;
+   if(prepare){
+    if(changeBeforeSend==='draft')editor.text='my own draft';
+    if(changeBeforeSend==='navigate')c.location.href+='c/other';
+    if(beforeSendAttachments)tiles.splice(0,tiles.length,...beforeSendAttachments(tiles));
+    assert.notEqual(verify(editor,false),false);
+    prepare(editor);
+   }
    if(sendError)throw Error(sendError);
    if(changeBeforeSend==='remount')editor={...editor,text:'synthetic\u00a0video prompt'};
    if(changeBeforeSend==='draft')editor.text='my own draft';
@@ -61,9 +79,9 @@ async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=fals
     beforeInput?.({isTrusted:true,target:editor});
     editor.text='synthetic  video prompt';
    }
-   if(changeBeforeSend==='navigate')c.location.href+='c/other';
-   if(beforeSendAttachments)tiles.splice(0,tiles.length,...beforeSendAttachments(tiles));
-   assert.notEqual(verify(editor),false);
+   if(!prepare&&changeBeforeSend==='navigate')c.location.href+='c/other';
+   if(!prepare&&beforeSendAttachments)tiles.splice(0,tiles.length,...beforeSendAttachments(tiles));
+   assert.notEqual(verify(editor,true),false);
    sent++;sentText=editor.text;editor.text='';
   },reportTarget:(msg,ok,error)=>{if(!ok)failure=error;},hideSaveButton(){},scrollToResponseOnTabFocus(){},hideStatus(){},showError(){},hideRetryRenameButton(){},
   renameConversationViaAPI:async(id,title)=>{renames.push({id,title});return !pending;},showFailedAttachmentRetry(){},chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
@@ -72,7 +90,7 @@ async function run({source,bvid,title=raw,tempChat=false,id='owned',pending=fals
  const handler=content.slice(content.indexOf("    if (msg.type === 'VIDSIFT_CHATGPT_PREPARE_PROMPT')"),content.indexOf("    if (msg.type === 'EXT_STATUS')"));
  vm.runInContext('(function(){'+helpers+handler+'})();',c);
  for(let n=0;n<30&&c._taskActive;n++)await new Promise(setImmediate);
- assert.equal(c._taskActive,false);return {sent,sentText,renames,retries,title:c.document.title,draftAtUpload,draft:editor.text,failure};
+ assert.equal(c._taskActive,false);return {sent,sentText,renames,retries,title:c.document.title,draftAtUpload,draftWhileWaitingForSend,draft:editor.text,failure};
 }
 test('ChatGPT leaves the composer blank while uploading and after an upload fails',async()=>{
  const result=await run({tempChat:true,uploadError:'upload failed'});
@@ -86,6 +104,12 @@ test('ChatGPT clears its own unsent prompt when submission fails',async()=>{
  assert.equal(result.draft,'');
  assert.equal(result.sent,0);
  assert.equal(result.failure,'send failed');
+});
+test('ChatGPT keeps the composer blank until the single submission attempt',async()=>{
+ const result=await run({tempChat:true});
+ assert.equal(result.draftWhileWaitingForSend,'');
+ assert.equal(result.sentText,'synthetic video prompt');
+ assert.equal(result.sent,1);
 });
 test('ChatGPT preserves user drafts present before or written during the upload',async()=>{
  for(const options of [{initialDraft:'my own draft'},{draftDuringUpload:'my own draft'}]){

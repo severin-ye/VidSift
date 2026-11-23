@@ -117,12 +117,11 @@
   }
 
   let _retryFailedBtn = null;
-  function restorePromptAfterManualUpload(task) {
-    const editor = findTextarea();
-    if (task && task === _lastConversationTask && !task.submitted && !cancelledTasks.has(task.taskId)
-        && task.recoveryPrompt && editor === task.recoveryEditor && !readComposerText(editor).trim()) {
-      inputPrompt(task.recoveryPrompt, editor);
-    }
+  function showManualUploadReady(task) {
+    const canCopy = task && task === _lastConversationTask && !task.submitted
+      && !cancelledTasks.has(task.taskId) && findTextarea() === task.recoveryEditor && task.recoveryPrompt;
+    showStatus(canCopy ? '附件已重新上传。可复制本次提示词，检查附件后手动发送。'
+      : '附件已重新上传。请检查附件后手动发送。', canCopy ? task.recoveryPrompt : undefined);
   }
 
   function showFailedAttachmentRetry(error) {
@@ -141,9 +140,8 @@
         // Only the positively failed tile owned by this attempt may be removed.
         (error.tile?.querySelector('button[aria-label^="Remove file"]') || error.tile?.querySelector('button[aria-label^="Remove "]'))?.click();
         await attachFileWithRetry(error.attachment.name, error.attachment.content, 1, error.attachment);
-        restorePromptAfterManualUpload(task);
         button.remove(); _retryFailedBtn = null;
-        showStatus('失败附件已重新上传；请检查所有附件后手动发送。');
+        showManualUploadReady(task);
       } catch (e) { showError(e.message); if (e.retryable) { error = e; button.disabled = false; } }
     });
     document.body.appendChild(button);
@@ -195,8 +193,7 @@
           showStatus('正在重新上传字幕文件...');
           const task = _lastConversationTask;
           await attachFileWithRetry(_lastFile.name, _lastFile.content);
-          restorePromptAfterManualUpload(task);
-          showStatus('字幕文件已重新上传，可继续手动发送。');
+          showManualUploadReady(task);
         } catch (e) {
           console.error('[ext] manual retry upload failed:', e);
           showError(`重新上传失败：${e.message}`);
@@ -247,7 +244,7 @@
 
   let statusOverlay = null;
 
-  function showStatus(msg) {
+  function showStatus(msg, copyPrompt) {
     if (!statusOverlay) {
       statusOverlay = document.createElement('div');
       statusOverlay.style.cssText =
@@ -275,6 +272,22 @@
     statusOverlay.style.background = '#10a37f';
     statusOverlay.style.opacity = '1';
     statusOverlay.querySelector('.__ext-status-text').textContent = msg;
+    statusOverlay.querySelector('.__ext-copy-prompt')?.remove();
+    if (copyPrompt) {
+      const button = document.createElement('button');
+      button.className = '__ext-copy-prompt';
+      button.type = 'button';
+      button.textContent = '复制提示词';
+      button.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(copyPrompt);
+          button.textContent = '已复制';
+        } catch {
+          showError('无法复制总结提示词，可从扩展设置复制后手动发送。');
+        }
+      });
+      statusOverlay.insertBefore(button, statusOverlay.lastElementChild);
+    }
   }
 
   function showError(msg) {
@@ -441,37 +454,56 @@
     }
   }
 
-  function clickSend(taskId, verifyComposer) {
+  function clickSend(taskId, verifyComposer, preparePrompt) {
     return new Promise((resolve, reject) => {
       let intervals = 0;
       let clickedEditor;
+      let preparing = false;
       const maxIntervals = 300; // 60-second hard limit
 
-      const timer = setInterval(() => {
-        if (taskId && cancelledTasks.has(taskId)) { clearInterval(timer); reject(new Error('任务已取消，未自动发送')); return; }
+      const timer = setInterval(async () => {
+        if (preparing) return;
         intervals++;
         if (clickedEditor && !readComposerText(clickedEditor).trim()) {
           clearInterval(timer);
           resolve();
           return;
         }
+        if (taskId && cancelledTasks.has(taskId)) {
+          clearInterval(timer);
+          reject(new Error(clickedEditor ? '已停止等待，ChatGPT 是否接收尚未确认，请查看原对话' : '任务已取消，未自动发送'));
+          return;
+        }
+        if (intervals >= maxIntervals) {
+          clearInterval(timer);
+          reject(new Error(clickedEditor ? '已点击发送，但未确认 ChatGPT 已接收，请查看原对话' : 'ChatGPT 发送条件在 60 秒内未就绪，未自动发送总结'));
+          return;
+        }
+        if (clickedEditor) return;
 
-        if (!clickedEditor) {
-          const editor = findTextarea();
-          let ready;
-          try { ready = verifyComposer?.(editor) !== false; }
-          catch (error) { clearInterval(timer); reject(error); return; }
-          const button = editor && ready && findSendButton(editor);
+        try {
+          let editor = findTextarea();
+          if (verifyComposer?.(editor, !preparePrompt) === false || !editor) return;
+          let button = findSendButton(editor);
+          if (preparePrompt) {
+            preparing = true;
+            preparePrompt(editor);
+            // A blank composer may hide Send until its input event has updated the page.
+            await Promise.resolve();
+            assertNotCancelled(taskId);
+            editor = findTextarea();
+            if (!editor || verifyComposer?.(editor, true) === false) throw new Error('发送前输入区或附件未就绪，未自动发送总结');
+            button = findSendButton(editor);
+            if (!button || button.disabled) throw new Error('ChatGPT 发送按钮未就绪，未自动发送总结');
+          }
           if (button && !button.disabled) {
             clickedEditor = editor;
             button.click();
           }
-        }
-
-        if (intervals >= maxIntervals) {
+        } catch (error) {
           clearInterval(timer);
-          reject(new Error('发送失败：60 秒内未能成功提交消息'));
-        }
+          reject(error);
+        } finally { preparing = false; }
       }, 200);
     });
   }
@@ -1042,27 +1074,29 @@
             await libraryBinding.ready; // Bounded handshake; capture failure never prevents the summary.
           }
           const temporaryFinished=msg.tempChat&&msg.awaitGeneration?createTemporaryGenerationTracker():null;
-          const draftEditor = await waitForComposer(msg.taskId, targetPage, checkComposer, allowPreparedPage);
-          const existing = readComposerText(draftEditor);
-          if (normalize(existing) !== expected) {
-            previousDraft = existing;
-            inputPrompt(prompt, draftEditor);
-          }
-          draftText = readComposerText(draftEditor);
-          _lastConversationTask.expectedText = draftText;
+          await waitForComposer(msg.taskId, targetPage, checkComposer, allowPreparedPage);
           window.addEventListener('pagehide', clearUnsentPrompt);
-          if (normalize(draftText) !== expected) {
-            throw new Error('ChatGPT 未完整接收本次提示词，未自动发送总结');
-          }
-          await clickSend(msg.taskId, editor => {
+          await clickSend(msg.taskId, (editor, prepared) => {
             if (location.href !== targetPage) throw new Error('ChatGPT 已切换页面，未自动发送总结');
             assertUnedited();
             if (!editor) return false;
+            if (!prepared) return checkComposer(editor);
             if (editor.closest('form') !== draftForm) throw new Error('ChatGPT 已切换输入区，未自动发送总结');
-            const observed = normalize(readComposerText(editor));
-            if (!observed && expected) return false;
-            if (observed !== expected) throw new Error('ChatGPT 输入框内容已改变，已保留草稿，未自动发送总结');
+            if (normalize(readComposerText(editor)) !== expected) {
+              throw new Error('ChatGPT 未完整接收本次提示词或输入框内容已改变，未自动发送总结');
+            }
             return verifyAttachments();
+          }, editor => {
+            const existing = readComposerText(editor);
+            try {
+              if (normalize(existing) !== expected) {
+                previousDraft = existing;
+                inputPrompt(prompt, editor);
+              }
+            } finally {
+              draftText = readComposerText(editor);
+              _lastConversationTask.expectedText = draftText;
+            }
           });
           submitted=true;
           _lastConversationTask.submitted=true;

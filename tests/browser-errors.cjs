@@ -3,11 +3,17 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const {chromium}=require('playwright');
 const root=path.resolve(__dirname,'..'),art=path.join(root,'.task-artifacts','visible-errors-browser');fs.mkdirSync(art,{recursive:true});
 const profile=fs.mkdtempSync(path.join(art,'profile-')),id='kggdkncbamdlhhihfkeldbbkppkgihad',cid='11111111-2222-4333-8444-555555555555';
-const report={profile,syntheticAPI:true,dailyProfileUsed:false,checks:[]};let context,old=false;
+const report={profile,syntheticAPI:true,dailyProfileUsed:false,checks:[]};let context,old=false,blocked=false;
 async function until(read,timeout=15000){const end=Date.now()+timeout;while(Date.now()<end){if(await read())return;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out waiting for persisted state');}
 fs.writeFileSync(path.join(art,'resource.json'),JSON.stringify({owner:'01a1c5ca',profile,purpose:'isolated extension errors/capture acceptance',cleanup:'close browser, read CLI, remove only this profile'},null,2));
 const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><form><div id="prompt-textarea" contenteditable="true"></div><input type="file" multiple><button type="button" data-testid="send-button">Send</button></form></main><script>
  window.sent=0;window.files=[];window.replacedAttachment=false;
+ const editor=document.querySelector('#prompt-textarea');
+ const draftKey='fixture-ordinary-chat-draft';
+ if(!editor.textContent)editor.textContent=localStorage.getItem(draftKey)||'';
+ let draftTimer;
+ function saveDraft(){clearTimeout(draftTimer);draftTimer=setTimeout(()=>{if(editor.innerText.trim())localStorage.setItem(draftKey,editor.innerText);else localStorage.removeItem(draftKey);},100);}
+ editor.addEventListener('input',saveDraft);
  document.querySelector('input').onchange=async e=>{for(const f of e.target.files){if(new TextEncoder().encode(f.name).length>120)throw Error('filename exceeds UTF-8 limit');window.files.push({name:f.name,content:await f.text()});const tile=document.createElement('span');tile.className='group/composer-attachment';const surface=document.createElement('button');surface.type='button';surface.className='composer-attachment-surface';surface.setAttribute('aria-label',f.name.slice(0,-4)+'(1).srt');tile.append(surface);document.querySelector('form').append(tile);}history.replaceState({},'','/c/${cid}');};
  window.addEventListener('message',event=>{
   if(event.data?.type!=='VIDSIFT_LIBRARY_ARM'||window.replacedAttachment)return;
@@ -16,9 +22,9 @@ const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><fo
   send.disabled=true;
   const replacement=tile.cloneNode(true);
   tile.remove();
-  setTimeout(()=>{document.querySelector('form').append(replacement);window.replacedAttachment=true;send.disabled=false;},350);
+  setTimeout(()=>{document.querySelector('form').append(replacement);window.replacedAttachment=true;send.disabled=window.fixtureBlockSend===true;},350);
  });
- document.querySelector('button').onclick=async()=>{const text=document.querySelector('#prompt-textarea').innerText;window.sent++;await fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify({conversation_id:'${cid}',messages:[{id:'user-message-one',author:{role:'user'},content:{parts:[text]}}]})});document.querySelector('#prompt-textarea').textContent='';};</script>`;
+ document.querySelector('button').onclick=async()=>{const text=editor.innerText;window.sent++;editor.textContent='';saveDraft();await fetch('/backend-api/f/conversation',{method:'POST',body:JSON.stringify({conversation_id:'${cid}',messages:[{id:'user-message-one',author:{role:'user'},content:{parts:[text]}}]})});};</script>`;
 (async()=>{try{
  context=await chromium.launchPersistentContext(profile,{headless:true,executablePath:process.env.VIDSIFT_BROWSER_EXE||'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',args:['--disable-extensions-except='+root,'--load-extension='+root]});
  let outgoing,renamedTitle;
@@ -27,7 +33,8 @@ const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><fo
   if(u.pathname==='/backend-api/f/conversation'){outgoing=route.request().postDataJSON();return route.fulfill({contentType:'text/event-stream',body:'data: '+JSON.stringify({conversation_id:cid})+'\n\n'});}
   if(u.pathname==='/backend-api/conversation/'+cid&&route.request().method()==='PATCH'){const title=route.request().postDataJSON().title;if(Array.from(title).length>128)return route.fulfill({status:422,json:{detail:'title too long'}});renamedTitle=title;return route.fulfill({json:{success:true}});}
   if(u.pathname==='/backend-api/conversation/'+cid)return route.fulfill({json:{conversation_id:cid,title:'generated title',create_time:Date.now()/1000-(old?86400:0),mapping:{first:{message:outgoing?.messages?.[0]}}}});
-  const page = old ? html.replace('contenteditable="true"></div>', 'contenteditable="true">acceptance prompt</div>') : html;
+  const page = old ? html.replace('contenteditable="true"></div>', 'contenteditable="true">acceptance prompt</div>')
+   : blocked && !u.searchParams.has('ordinary-draft-check') ? html.replace('window.sent=0;', 'window.fixtureBlockSend=true;window.sent=0;') : html;
   return route.fulfill({contentType:'text/html',body:page});
  });
  const control=await context.newPage();await control.goto('chrome-extension://'+id+'/options.html');
@@ -55,6 +62,19 @@ const html=`<!doctype html><meta charset="utf-8"><title>Fixture</title><main><fo
   await until(()=>control.evaluate(async()=>{const s=(await chrome.storage.local.get('vidsiftErrorLog')).vidsiftErrorLog;return s?.errors.some(e=>e.message.includes('日志验收错误'));}));
   assert.equal(await page.evaluate(()=>window.sent),1);await page.close();
  }
+ old=false;blocked=true;
+ const targetPage=await context.newPage();await targetPage.goto('https://chatgpt.com/');
+ await targetPage.locator('#prompt-textarea').waitFor();
+ const target=await control.evaluate(async()=>(await chrome.tabs.query({})).find(t=>t.url==='https://chatgpt.com/'));assert(target);
+ await control.evaluate(tabId=>chrome.tabs.sendMessage(tabId,{type:'VIDSIFT_CHATGPT_PREPARE_PROMPT',taskId:'blocked-send',videoTitle:'Blocked draft test',prompt:'extension-owned unsent draft',file:{name:'blocked.srt',content:'fixture'},tempChat:false}),target.id);
+ await targetPage.getByText('ChatGPT 发送按钮未就绪，未自动发送总结',{exact:false}).waitFor();
+ assert.equal((await targetPage.locator('#prompt-textarea').innerText()).trim(),'');
+ assert.equal(await targetPage.evaluate(()=>window.sent),0);
+ const ordinary=await context.newPage();await ordinary.goto('https://chatgpt.com/?ordinary-draft-check');
+ assert.equal((await ordinary.locator('#prompt-textarea').innerText()).trim(),'');
+ await ordinary.close();
+ await targetPage.close();
+ report.checks.push('blocked send rolls back the owned prompt without leaving a draft for an ordinary new chat');
  const settings=await control.evaluate(()=>chrome.storage.local.get('customPrompt'));assert.equal(settings.customPrompt,'acceptance prompt');
  await context.close();context=null;
  const cli=cp.spawnSync('py',['-3','scripts/diagnostics.py','--store',path.join(profile,'Default','Local Extension Settings',id),'--json'],{cwd:root,encoding:'utf8'});assert.equal(cli.status,0,cli.stderr||cli.stdout);const output=JSON.parse(cli.stdout);const errors=output.profiles[0].errors;assert(errors.some(e=>e.message.includes('日志验收错误')));assert(!cli.stdout.includes('never-export-this'));assert(!cli.stdout.includes('acceptance prompt'));report.checks.push('visible error persisted and CLI read it after browser exit with secrets and custom prompt excluded');
