@@ -70,6 +70,33 @@ test('missing covers rotate fairly instead of starving the sixth saved card',asy
  await bridge.drain();await bridge.drain();const ids=new Set(f.sent.filter(x=>x.msg.record).map(x=>x.msg.record.id));assert.equal(ids.size,6);
 });
 
+test('a new collection waits for an earlier save then drains its own record',async()=>{
+ const f=fixture(),bridge=new lib.VideoLibraryBridge(f.api,{cover:async()=>''});
+ const added='22222222-2222-4333-8444-555555555555',save=f.api.runtime.sendMessage;
+ let enter,release;
+ const entered=new Promise(resolve=>{enter=resolve;});
+ const hold=new Promise(resolve=>{release=resolve;});
+ f.api.runtime.sendMessage=async(extensionId,message)=>{
+  if(message.record?.id===ID){enter();await hold;return {ok:false,error:'older record unavailable'};}
+  return save(extensionId,message);
+ };
+ async function enqueue(id,tabId){
+  const sender={tab:{id:tabId}};
+  await bridge.register({taskId:id,tabId,source,tempChat:false});
+  await bridge.submitted(id,sender);
+  await bridge.confirmed(id,sender,'https://chatgpt.com/c/'+id);
+ }
+ await enqueue(ID,1);
+ const initial=bridge.drain();
+ await entered;
+ await enqueue(added,2);
+ const collection=bridge.drain(added);
+ release();
+ await Promise.all([initial,collection]);
+ assert.deepEqual((await bridge.read()).pending.map(record=>record.id),[ID]);
+ assert.equal(f.sent.at(-1).msg.record.id,added);
+});
+
 test('twenty acknowledged cover failures never consume unsaved capacity',async()=>{
  const f=fixture(),bridge=new lib.VideoLibraryBridge(f.api,{cover:async()=>''});
  for(let i=0;i<25;i++){const id=String(i).padStart(8,'0')+'-2222-4333-8444-555555555555';await bridge.register({taskId:String(i),tabId:i,source,tempChat:false});await bridge.submitted(String(i),{tab:{id:i}});await bridge.confirmed(String(i),{tab:{id:i}},'https://chatgpt.com/c/'+id);await bridge.drain();}

@@ -117,3 +117,9 @@ body.summary-mode { --bg:#f0ede5;--surface:#fffdf8;--border:#d8cfbf;--text:#1732
 .summary-mode #summaryState,.summary-mode #summaryCurrent { color:#53666d; }
 #summaryPanel button:hover { border-color:var(--accent);background:#fbf9f2; }
 #summaryPanel button:disabled { cursor:wait;opacity:.6; }
+#summaryList li { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px; }
+#summaryPanel [data-remove-summary] { width:auto; }
+#summaryRemoveDialog { max-width:calc(100% - 20px);padding:12px;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:8px; }
+#summaryRemoveDialog::backdrop { background:#0006; }
+#summaryRemoveDialog form { display:flex;gap:8px; }
+#collectBtn { margin-top:8px; }

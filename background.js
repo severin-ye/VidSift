@@ -22,7 +22,7 @@ async function getTabInfo(tabId) {
   }
 }
 
-async function createTaskTarget(url,active,sourceTabId){
+async function createTaskTarget(url,active,sourceTabId,allowNewWindow=true){
   const info=await getTabInfo(sourceTabId);
   try{
     return await chrome.tabs.create({url,active,...(info.openerTabId==null?{}:{openerTabId:info.openerTabId,index:info.index+1}),...(info.windowId==null?{}:{windowId:info.windowId})});
@@ -32,6 +32,7 @@ async function createTaskTarget(url,active,sourceTabId){
     if(!/No tab with id\b|No window with id\b|No current window\b|window.*(?:not found|closed)|标签页不存在|窗口不存在/i.test(String(error?.message||error)))throw error;
     const windows=await chrome.windows?.getAll?.({windowTypes:['normal']});
     if(windows?.length)return chrome.tabs.create({url,active,windowId:windows.find(w=>w.focused)?.id??windows[0].id});
+    if(!allowNewWindow)throw Error('没有可用的浏览器窗口，未启动后台收藏');
     if(chrome.windows?.create){
       const window=await chrome.windows.create({url,focused:active});
       const tab=window.tabs?.[0]||(await chrome.tabs.query({windowId:window.id}))[0];
@@ -498,15 +499,20 @@ async function drainSummaryQueue(){
     }
   }finally{clearInterval(pulse);_summaryQueueRunning=false;}
 }
-async function _dispatchChatGPTAndSend({ file, attachments, taskId, legacyTask, beforeDispatch, beforePrepare, source, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid }) {
+async function _dispatchChatGPTAndSend({ file, attachments, taskId, legacyTask, beforeDispatch, beforePrepare, source, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid, collect=false }) {
   let targetTabId = null;
+  let finishingCollection=false;
+  const activated=new Set();
+  const onActivated=({tabId})=>{if(targetTabId===null||tabId===targetTabId)activated.add(tabId);};
+  if(collect)chrome.tabs.onActivated.addListener(onActivated);
   try {
     if(legacyTask) await _legacyGuard.check(legacyTask);
     let url = 'https://chatgpt.com/';
     if (tempChat) url += '?temporary-chat=true';
 
-    const tab = await createTaskTarget(url,!bgOpen,biliTabId??openerTabId);
+    const tab = await createTaskTarget(url,!bgOpen&&!collect,biliTabId??openerTabId,!collect);
     targetTabId = tab.id;
+    if(tab.active)activated.add(tab.id);
     await waitForTabLoad(targetTabId);
 
     overlayMsg(targetTabId, { type: 'EXT_STATUS', text: '正在连接 ChatGPT...' });
@@ -521,13 +527,15 @@ async function _dispatchChatGPTAndSend({ file, attachments, taskId, legacyTask, 
     if(legacyTask) { await _legacyGuard.check(legacyTask); taskId=legacyTask.id; }
     if(beforePrepare) await beforePrepare();
     const libraryEligible=await prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,openerTabId,videoTitle,tempChat});
+    if(collect&&!libraryEligible)throw Error('未能登记书库收藏，当前视频总结未发送');
     if(legacyTask)await _legacyGuard.check(legacyTask);
     if(beforePrepare)await beforePrepare();
     const completion = beforeDispatch ? beforeDispatch(targetTabId) : legacyTask ? waitForTarget(legacyTask,targetTabId) : null;
+    if(collect&&!completion)throw Error('当前任务无法确认后台收藏完成，未发送总结');
     if (completion) completion.catch(() => {});
     const accepted=await chrome.tabs.sendMessage(targetTabId, {
       type: 'VIDSIFT_CHATGPT_PREPARE_PROMPT',
-      attachments, taskId, source:source||legacyTask?.source, libraryEligible, awaitGeneration:true,
+      attachments, taskId, source:source||legacyTask?.source, libraryEligible, awaitGeneration:true, collect,
       file,
       bgOpen,
       tempChat,
@@ -535,11 +543,22 @@ async function _dispatchChatGPTAndSend({ file, attachments, taskId, legacyTask, 
       bvid,
     });
     if(!accepted?.ok){const error=new Error(accepted?.error||'ChatGPT 未确认接收总结任务，未重复发送');_targetCompletions.get(taskId)?.reject(error);throw error;}
-    return { ok: true, targetTabId, completion };
+    if(!collect)return { ok: true, targetTabId, completion };
+    finishingCollection=true;
+    const saved=completion.then(async ({chatgptUrl})=>{
+     await confirmVideoCollection(chatgptUrl);
+     try{
+      const current=await chrome.tabs.get(targetTabId);
+      if(!current.active&&!current.pinned&&!activated.has(targetTabId)&&!current.pendingUrl&&VidSiftVideoLibrary.conversationUrl(current.url)===chatgptUrl)await chrome.tabs.remove(targetTabId);
+     }catch{}
+    }).finally(()=>chrome.tabs.onActivated.removeListener(onActivated));
+    return {ok:true,targetTabId,completion:saved};
   } catch (e) {
     if(taskId)_videoLibrary.abandon(taskId).catch(()=>{});
     if (targetTabId) overlayMsg(targetTabId, { type: 'EXT_ERROR', text: `错误：${e.message}` });
     return { ok: false, error: e.message };
+  } finally {
+    if(collect&&!finishingCollection)chrome.tabs.onActivated.removeListener(onActivated);
   }
 }
 
@@ -551,13 +570,13 @@ async function handleTask(msg, notify, legacyTask) {
   try {
     if (taskType === 'chatgpt') {
       notify('STATUS', '正在打开 ChatGPT...');
-      const result = await _openChatGPTAndSend({ file, source:msg.source||legacyTask?.source, legacyTask, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid });
+      const result = await _openChatGPTAndSend({ file, source:msg.source||legacyTask?.source, legacyTask, openerTabId, bgOpen, tempChat, biliTabId, videoTitle, bvid, collect:msg.collect });
       if(result.completion) await result.completion;
       if (!result.ok) {
         notify('ERROR', result.error);
         return;
       }
-      notify('DONE', bgOpen ? '已在后台打开 ChatGPT 页面。' : '已切换到 ChatGPT 页面。');
+      notify('DONE', msg.collect ? '视频总结已生成并收藏到知行批注书库。' : bgOpen ? '已在后台打开 ChatGPT 页面。' : '已切换到 ChatGPT 页面。');
 
     } else if (taskType === 'selfhosted') {
       // 自建服务：通知 bilibili content script 发起 SSE 转写请求

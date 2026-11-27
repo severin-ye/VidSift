@@ -98,7 +98,7 @@
      await d.sendChatGPT({...common,file,attachments:[{...file,mime:'text/plain'},...attachments]});
     }
     if(task.cancelled||this.tasks.get(taskKey)!==task)throw new Error('视频处理已取消或被替代');
-    localOutcome='success';log('task.completed');status('DONE','总结请求已发送给 ChatGPT。');return {ok:true,source:context,frameInfo:result.frameInfo};
+    localOutcome='success';log('task.completed');status('DONE',msg.collect?'视频总结已生成并收藏到知行批注书库。':'总结请求已发送给 ChatGPT。');return {ok:true,source:context,frameInfo:result.frameInfo};
    }catch(e){log('task.failed',{category:root.VidSiftDiagnostics?.category(e)||'operation_failed',errorName:e.name});status('ERROR',e.message);throw e;}
    finally{
     if(localAudio)try{await task.client?.finishLocalAudio?.(localAudio,task.cancelled?'cancelled':localOutcome);}catch{}

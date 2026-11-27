@@ -13,3 +13,13 @@ test('broken or cyclic message ancestry cannot complete a queued summary',()=>{
  assert.equal(context.hasFinishedTaskResponse({mapping:{a:assistant('b'),b:{parent:'a'}}},'current'),false);
  assert.equal(context.hasFinishedTaskResponse({mapping:{done:assistant('missing')}},'current'),false);
 });
+test('collection requires the current request to have a nonempty final reply',()=>{
+ const reply=assistant('u'),mapping={u:user('current'),reply};
+ reply.message.content={content_type:'text',parts:['  ']};
+ assert.notEqual(context.taskResponseOutcome({mapping},'current',true),'completed');
+ reply.message.content.parts=['A summary'];
+ reply.message.channel='analysis';
+ assert.notEqual(context.taskResponseOutcome({mapping},'current',true),'completed');
+ reply.message.channel='final';
+ assert.equal(context.taskResponseOutcome({mapping},'current',true),'completed');
+});

@@ -79,15 +79,20 @@
    const record=makeRecord(task.source,url,{now:this.now});record.createdAt=task.createdAt;
    await this.mutate(s=>{const current=s.tasks.find(t=>t.taskId===task.taskId&&t.sent);if(!current)return;current.chatgptUrl=record.chatgptUrl;const existing=s.pending.find(p=>p.id===record.id);if(!existing&&s.pending.length>=20){s.message='视频书库待保存记录已满，请在设置中重试；当前链接仍已保留';return;}if(!existing)s.pending.push(record);s.tasks=s.tasks.filter(t=>t.taskId!==task.taskId);s.message='视频总结信息已在本地排队，等待知行批注书库接收';});
   }
-  drain(){if(this.draining)return this.draining;this.draining=this.deliver().finally(()=>{this.draining=null;});return this.draining;}
-  async deliver(){
+  drain(recordId){
+   if(this.draining)return recordId?this.draining.then(()=>this.drain(recordId)):this.draining;
+   this.draining=this.deliver(recordId).finally(()=>{this.draining=null;});return this.draining;
+  }
+  async deliver(recordId){
    const config=await this.getSettings();if(!config.enabled)return this.status();
    for(const task of (await this.read()).tasks.filter(t=>t.sent&&t.chatgptUrl))await this.queue(task,task.chatgptUrl);
-   const state=await this.read();if(!state.pending.length&&!state.covers.length)return this.status();
+   const state=await this.read();
+   const unsaved=recordId?state.pending.filter(record=>record.id===recordId):state.pending.slice(0,state.covers.length?4:5);
+   const supplements=recordId?[]:state.covers.slice(0,5-unsaved.length);
+   if(!unsaved.length&&!supplements.length)return this.status();
    try{
     const hello=await deadline(this.api.runtime.sendMessage(config.extensionId,{type:'ZHIXING_VIDSIFT_HELLO'}));
     if(!hello?.ok||hello.protocol!=='zhixing-video-library'||hello.version!==1)throw Error('知行批注书库尚未支持视频入库，请更新后重试');
-    const unsaved=state.pending.slice(0,state.covers.length?4:5),supplements=state.covers.slice(0,5-unsaved.length);
     for(const original of [...unsaved,...supplements]){
      const record={...original};if(record.coverUrl&&!record.coverDataUrl)try{record.coverDataUrl=await this.cover(record.coverUrl);}catch{}
      const alreadySaved=supplements.some(p=>p.id===record.id);

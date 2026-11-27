@@ -42,8 +42,9 @@ async function toolbarPopup(browser,worker){
 }
 async function until(read,why){const end=Date.now()+15000;while(Date.now()<end){if(await read())return;await new Promise(r=>setTimeout(r,80));}throw Error('Timeout: '+why);}
 (async()=>{try{
- context=await chromium.launchPersistentContext(profile,{headless:true,channel:'msedge',args:['--disable-extensions-except='+[extension,receiver].join(','),'--load-extension='+[extension,receiver].join(',')]});
+ context=await chromium.launchPersistentContext(profile,{headless:true,...(process.env.VIDSIFT_BROWSER_EXE?{executablePath:process.env.VIDSIFT_BROWSER_EXE}:{channel:'msedge'}),args:['--disable-extensions-except='+[extension,receiver].join(','),'--load-extension='+[extension,receiver].join(',')]});
  await context.route('https://chatgpt.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><meta charset="utf-8"><title>合成总结</title><main>用于弹窗测试的合成总结对话</main>'}));
+ await context.route('https://www.bilibili.com/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>源视频</title><h1>源视频</h1>'}));
  const control=await context.newPage();await control.goto('chrome-extension://'+id+'/options.html');
  await until(()=>context.serviceWorkers().some(w=>!w.url().includes(id)),'library service worker');
  const libraryId=new URL(context.serviceWorkers().find(w=>!w.url().includes(id)).url()).hostname;
@@ -62,7 +63,8 @@ async function until(read,why){const end=Date.now()+15000;while(Date.now()<end){
   try{await until(()=>page.locator('#summaryRating').isEnabled(),'popup rating readiness');}catch(error){report.popupText=await page.locator('body').innerText();report.popupTabs=await control.evaluate(()=>chrome.tabs.query({active:true,currentWindow:true}));throw error;}return page;
  }
  let panel=await popup();assert.equal(await panel.locator('#summaryRating').inputValue(),'');
- assert.equal(await panel.locator('#summaryList button').count(),10);assert.equal(await panel.locator('#optionArea').isVisible(),false);
+ const openButtons='#summaryList button:not([data-remove-summary])';
+ assert.equal(await panel.locator(openButtons).count(),10);assert.equal(await panel.locator('#optionArea').isVisible(),false);
  assert.match(await panel.locator('#summaryTitle').innerText(),/总结 12/);
  const bounds=await panel.locator('#summaryRating').boundingBox(),listBounds=await panel.locator('#summaryList').boundingBox();assert(bounds.y<listBounds.y);
  report.checks.push('GPT query/hash route loads current rating first; video extraction controls hidden; 10-row bounded page');
@@ -78,10 +80,10 @@ async function until(read,why){const end=Date.now()+15000;while(Date.now()<end){
  await panel.close();
  await until(async()=>await book.locator('select[data-rating-target="video:'+cid(12)+'"]').inputValue()==='','library sees clear');
  panel=await popup();assert.equal(await panel.locator('#summaryRating').inputValue(),'');report.checks.push('clear is shared with library and survives reopening popup');
- await panel.locator('#summaryNext').click();await until(async()=>await panel.locator('#summaryList button').count()===2,'second page');
+ await panel.locator('#summaryNext').click();await until(async()=>await panel.locator(openButtons).count()===2,'second page');
  assert.equal(await panel.locator('#summaryNext').isVisible(),false);
  await panel.screenshot({path:path.join(artifacts,'popup.png')});
- const selected=panel.locator('#summaryList button').last();await selected.click();await target.waitForURL(chat(1));
+ const selected=panel.locator(openButtons).last();await selected.click();await target.waitForURL(chat(1));
  assert.equal((await control.evaluate(async id=>chrome.tabs.get(id),targetId)).url,chat(1));
  report.checks.push('second page contains final two members; click navigates original GPT tab without creating a summary');
  panel=await popup();assert.equal(await panel.locator('#summaryRating').inputValue(),'');
@@ -101,6 +103,27 @@ async function until(read,why){const end=Date.now()+15000;while(Date.now()<end){
  panel=await toolbarPopup(context.browser(),worker);
  await until(async()=>/尚未收录/.test(await panel.locator('#summaryState').innerText()),'unregistered conversation state');assert.equal(await panel.locator('#summaryRating').isEnabled(),false);assert.equal(await panel.locator('#summaryRating').inputValue(),'unknown');
  report.checks.push('missing saved conversation remains explicit unknown with scoring disabled');
+ await panel.close();await target.goto(chat(1));panel=await popup();
+ await panel.locator('#summaryRemoveCurrent').click();
+ await panel.locator('#summaryRemoveDialog button[value="cancel"]').click();
+ assert.equal((await external({type:'ZHIXING_VIDSIFT_SUMMARY_CONTEXT',version:1,chatgptUrl:chat(1),limit:10})).ok,true);
+ await panel.locator('#summaryRemoveCurrent').click();
+ await panel.locator('#summaryRemoveDialog button[value="remove"]').click();
+ await target.waitForURL(chat(12));
+ assert.equal((await external({type:'ZHIXING_VIDSIFT_SUMMARY_CONTEXT',version:1,chatgptUrl:chat(1),limit:10})).code,'NOT_FOUND');
+ report.checks.push('GPT popup cancel preserves current record; confirm removes it and navigates the original tab to a remaining summary');
+ const video=await context.newPage();await video.goto(videoUrl);await video.bringToFront();
+ panel=await toolbarPopup(context.browser(),worker);
+ await until(async()=>await panel.locator(openButtons).count()===10,'video summary list');
+ assert.equal(await panel.locator('#collectBtn').isVisible(),true);
+ assert.equal(await panel.locator('#summaryRating').isVisible(),false);
+ await panel.locator('[data-remove-summary]').click();
+ await panel.locator('#summaryRemoveDialog button[value="remove"]').click();
+ await until(async()=>/已从书库移除/.test(await panel.locator('#summaryState').innerText()),'video removal refresh');
+ assert.equal((await external({type:'ZHIXING_VIDSIFT_SUMMARY_CONTEXT',version:1,chatgptUrl:chat(12),limit:10})).code,'NOT_FOUND');
+ const [opened]=await Promise.all([context.waitForEvent('page'),panel.locator(openButtons).click()]);
+ await opened.waitForURL(chat(11));assert.equal(video.url(),videoUrl);
+ report.checks.push('video popup shows books with reminder off, removes one member, and opens another in a new tab without leaving the source video');
  report.passed=true;
 }catch(error){report.error=error.stack;process.exitCode=1;}
 finally{if(context)await context.close();report.contextClosed=true;for(const item of [profile,receiver]){const absolute=path.resolve(item);assert(absolute.startsWith(path.resolve(artifacts)+path.sep));fs.rmSync(absolute,{recursive:true,force:true});}report.profileRemoved=!fs.existsSync(profile);report.receiverRemoved=!fs.existsSync(receiver);fs.writeFileSync(path.join(artifacts,'receipt.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));}})();

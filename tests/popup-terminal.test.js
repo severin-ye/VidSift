@@ -3,10 +3,10 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 
 async function fixture(initial={active:false}){
- const elements=new Map(),intervals=[],listeners=[];
+ const elements=new Map(),intervals=[],listeners=[],requests=[];
  const element=id=>{if(!elements.has(id)){const classes=new Set();elements.set(id,{textContent:'',checked:false,disabled:false,style:{},classList:{add:x=>classes.add(x),remove:x=>classes.delete(x),contains:x=>classes.has(x)},addEventListener(){}});}return elements.get(id);};
  let state=initial;
- const port={onMessage:{addListener:fn=>listeners.push(fn)},onDisconnect:{addListener(){}},postMessage(){}};
+ const port={onMessage:{addListener:fn=>listeners.push(fn)},onDisconnect:{addListener(){}},postMessage(message){requests.push(message);}};
  const context=vm.createContext({console,document:{getElementById:element},localStorage:{getItem:()=>null,setItem(){}},setInterval:fn=>intervals.push(fn),
   ScreenshotSettings:{normalize:()=>({enabled:false})},AudioSettings:{normalize:()=>({})},
   VidSiftPlatforms:{identify:url=>url?.includes('douyin.com')?{platform:'douyin',videoId:'123'}:null},
@@ -14,8 +14,19 @@ async function fixture(initial={active:false}){
   chrome:{storage:{local:{get:async()=>({}),set:async()=>{}}},tabs:{query:async()=>[{id:7,url:'https://www.douyin.com/video/123'}]},runtime:{connect:()=>port,sendMessage:async msg=>msg.type==='GET_TAB_TRANSCRIBE_STATUS'?state:msg.type==='VIDSIFT_DISCOVER_SOURCE'?{ok:true,snapshot:{source:{platform:'douyin',videoId:'123',url:'https://www.douyin.com/video/123'}}}:{},openOptionsPage(){}}}});
  vm.runInContext(fs.readFileSync(path.join(__dirname,'..','popup.js'),'utf8'),context,{filename:'popup.js'});
  await new Promise(setImmediate);
- return {element,context,emit:msg=>listeners.forEach(fn=>fn(msg)),poll:async next=>{state=next;await intervals[0]();}};
+ return {element,context,requests,emit:msg=>listeners.forEach(fn=>fn(msg)),poll:async next=>{state=next;await intervals[0]();}};
 }
+
+test('collection always asks for a background ordinary conversation without changing send preferences',async()=>{
+ const f=await fixture();
+ f.element('tempChatCheckbox').checked=true;
+ f.element('bgOpenCheckbox').checked=false;
+ await vm.runInContext('run(true)',f.context);
+ assert.equal(f.requests[0].collect,true);
+ assert.equal(f.requests[0].bgOpen,true);
+ assert.equal(f.requests[0].tempChat,false);
+ assert.equal(f.element('tempChatCheckbox').checked,true);
+});
 
 test('live transcription failure replaces stale compression progress and permits retry',async()=>{
  const f=await fixture();await vm.runInContext('run()',f.context);

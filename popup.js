@@ -36,6 +36,7 @@ cancelBtn.addEventListener('click', async () => {
 
 // DOM
 const runBtn = document.getElementById('runBtn');
+const collectBtn = document.getElementById('collectBtn');
 const errorBox = document.getElementById('errorBox');
 const statusText = document.getElementById('statusText');
 const tempChatCheckbox = document.getElementById('tempChatCheckbox');
@@ -59,6 +60,7 @@ tempChatCheckbox.addEventListener('change', () => {
 
 // 根据 transcribeService 和字幕状态更新按钮文案与复选框文案
 function updateUI() {
+  collectBtn.disabled = runBtn.disabled || isRunning;
   if (activeTranscribeTask?.active) {
     runBtn.textContent = '视频处理进行中';
     return;
@@ -268,7 +270,7 @@ function subtitleToSrt(body) {
 }
 
 // Main flow
-async function run() {
+async function run(collect=false) {
   if (isRunning) return;
   const diagnosticId='click_'+Date.now()+'_'+Math.random().toString(36).slice(2);
   hideError();isRunning=true;canClose=false;
@@ -280,7 +282,8 @@ async function run() {
     if(!source)throw new Error('请在 B站、YouTube 或抖音视频页面使用此扩展。');
     popupDiagnostic(diagnosticId,'popup.clicked',{},tab.id,tab.url);
     if(transcribeService==='local'&&source.platform!=='douyin'){
-      const granted=await chrome.permissions.request({origins:['https://*.huggingface.co/*','https://cdn.jsdelivr.net/*']});
+      const modelAccess={origins:['https://*.huggingface.co/*','https://cdn.jsdelivr.net/*']};
+      const granted=await (collect?chrome.permissions.contains(modelAccess):chrome.permissions.request(modelAccess));
       if(!granted)throw new Error('本地模型权限未授予，请在设置页完成配置');
     }
     const port=chrome.runtime.connect({name:'vidsift-video'});
@@ -293,18 +296,20 @@ async function run() {
         isRunning=false;cancelBtn.style.display='none';activeTranscribeTask=null;runBtn.disabled=false;updateUI();
       }
     });
-    port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;setStatus('弹窗连接已断开；重新打开扩展可查看后台任务状态');}});
+    port.onDisconnect.addListener(()=>{if(isRunning){isRunning=false;runBtn.disabled=false;updateUI();setStatus('弹窗连接已断开；重新打开扩展可查看后台任务状态');}});
     // Transfer the click snapshot before metadata, subtitles or media are fetched.
-    port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:source.url,source,clickedSource:sourceDiscoverySnapshot?.source,clickedPageSource:sourceDiscoverySnapshot?.pageSource,openerTabId:tab.id,bgOpen:bgOpenCheckbox.checked,tempChat:tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings});
+    port.postMessage({type:'START_VIDEO_TASK',diagnosticId,sourceUrl:source.url,source,clickedSource:sourceDiscoverySnapshot?.source,clickedPageSource:sourceDiscoverySnapshot?.pageSource,openerTabId:tab.id,collect,bgOpen:collect||bgOpenCheckbox.checked,tempChat:!collect&&tempChatCheckbox.checked,forceAudio:forceAIStudioCheckbox.checked,screenshotSettings,audioSettings,transcribeService,model:localModel,device:localDevice,localSettings:douyinLocalSettings,groqSettings});
     runBtn.disabled=true;
+    collectBtn.disabled=true;
     setStatus('正在交给后台接收...');
   } catch(e) {
     popupDiagnostic(diagnosticId,'popup.failed',{errorName:e.name,category:'operation_failed'});
-    isRunning=false;runBtn.disabled=false;showError(e.message);
+    isRunning=false;runBtn.disabled=false;updateUI();showError(e.message);
   }
 }
 
-runBtn.addEventListener('click', run);
+runBtn.addEventListener('click', () => run());
+collectBtn.addEventListener('click', () => run(true));
 
 // Init: load transcribeService config, check if current page is bilibili video, pre-check subtitle
 (async () => {
@@ -347,6 +352,8 @@ runBtn.addEventListener('click', run);
       }else{runBtn.textContent='请从视频页开始';setStatus(discoveryError||'请在 B站、YouTube 或抖音视频页面使用');}
       runBtn.disabled=true;return;
     }
+    collectBtn.hidden=false;
+    void globalThis.VidSiftSummaryPopup?.open(tab,sourceDiscoverySnapshot.source.url);
     activeTranscribeTask = taskStatus.active ? taskStatus : null;
     if (currentPlatform !== 'bilibili') {
       forceAIStudioLabel.style.display=''; runBtn.disabled=false;
@@ -384,6 +391,7 @@ runBtn.addEventListener('click', run);
     showError(`扩展初始化失败：${e.message}`);
     setStatus('请刷新视频页并重新打开扩展；若仍失败，请在扩展管理页重新加载知行视频总结。');
     runBtn.disabled = true;
+    collectBtn.disabled = true;
     runBtn.textContent = '初始化失败';
   }
 })();

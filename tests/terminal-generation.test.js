@@ -17,7 +17,10 @@ test('missing user message identity cannot claim a failed or completed response'
 test('production generation rejection sends one negative target receipt',async()=>{
  const reports=[],errors=[],f=fixture({read:()=>data('cancelled')});
  Object.assign(f.context,{msg:{taskId:'task',tempChat:false},libraryBinding:{promise:Promise.resolve('owned')},temporaryFinished:null,reportTarget:(msg,ok,error)=>reports.push({ok,error}),showError:error=>errors.push(error)});
- const statement=source.match(/generation=waitForSummaryGeneration\(msg,libraryBinding,temporaryFinished\)\.then\([^\n]+/)[0];
+ const start=source.indexOf('generation=waitForSummaryGeneration(msg,libraryBinding,temporaryFinished)');
+ const end=source.indexOf('}else reportTarget(msg, true);',start);
+ assert(start>=0&&end>start);
+ const statement=source.slice(start,end);
  await vm.runInContext(statement,f.context);
  assert.equal(reports.length,1);assert.equal(reports[0].ok,false);assert.match(reports[0].error,/已停止/);assert.equal(errors.length,1);assert.equal(f.reads(),1);
 });

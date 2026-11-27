@@ -8,7 +8,7 @@
   let _lastConversationTask = null;
   const cancelledTasks = new Set();
   function assertNotCancelled(taskId) { if (taskId && cancelledTasks.has(taskId)) throw new Error(_lastConversationTask?.taskId===taskId&&_lastConversationTask.submitted?'总结已发送；扩展已停止后续处理，请查看原 ChatGPT 对话，不要重复提交':'任务已取消，未自动发送'); }
-  function reportTarget(msg, ok, error) { if (msg.taskId) chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok,...(error?{error}:{})}).catch(() => {}); }
+  function reportTarget(msg, ok, error, chatgptUrl) { if (msg.taskId) chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_DONE',taskId:msg.taskId,ok,...(error?{error}:{}),...(chatgptUrl?{chatgptUrl}:{})}).catch(() => {}); }
   function readComposerText(editor = findTextarea()) {
     return editor?.value ?? editor?.innerText ?? editor?.textContent ?? '';
   }
@@ -801,7 +801,7 @@
   }
 
   // A title or an older reply cannot release the summary queue.
-  function taskResponseOutcome(data,requestMessageId){
+  function taskResponseOutcome(data,requestMessageId,requireText=false){
     if(typeof requestMessageId!=='string'||!requestMessageId)return null;
     const mapping=data.mapping||{};
     let failure=null;
@@ -816,7 +816,11 @@
       }
       if(!owned)continue;
       const status=node.message.status;
-      if(status==='finished_successfully'&&node.message.end_turn===true)return 'completed';
+      if(status==='finished_successfully'&&node.message.end_turn===true){
+        if(!requireText)return 'completed';
+        const {channel,content}=node.message;
+        if((!channel||channel==='final')&&content?.content_type==='text'&&Array.isArray(content.parts)&&content.parts.some(part=>typeof part==='string'&&part.trim()))return 'completed';
+      }
       // Only explicit error/cancellation labels terminate a failed request.
       // finished_partial and unknown statuses can also describe unfinished work.
       if(['failed','finished_with_error'].includes(status))failure='failed';
@@ -860,8 +864,8 @@
           const data=await response.json();
           const owned=VidSiftConversationBinding.verify(data,{...task,id,messageId:task.requestMessageId,now:Date.now()});
           if(owned.ok){
-            const outcome=taskResponseOutcome(data,task.requestMessageId);
-            if(outcome==='completed')return;
+            const outcome=taskResponseOutcome(data,task.requestMessageId,msg.collect);
+            if(outcome==='completed')return id;
             if(outcome)throw new Error('总结已发送，但本次 ChatGPT 生成'+(outcome==='cancelled'?'已停止':'失败')+'；没有重复发送，后续视频将继续处理');
           }
         }else if(response&&[401,403].includes(response.status))throw new Error('总结已发送，但读取本次生成状态需要重新登录或访问验证；没有重复发送');
@@ -1102,9 +1106,18 @@
           _lastConversationTask.submitted=true;
           if(msg.awaitGeneration)chrome.runtime.sendMessage({type:'VIDSIFT_TARGET_SENT',taskId:msg.taskId}).catch(()=>{});
           if(msg.awaitGeneration){
-            generation=waitForSummaryGeneration(msg,libraryBinding,temporaryFinished).then(()=>reportTarget(msg,true),error=>{showError(error.message);reportTarget(msg,false,error.message);});
+            generation=waitForSummaryGeneration(msg,libraryBinding,temporaryFinished).then(async id=>{
+              if(!msg.collect){reportTarget(msg,true);return;}
+              assertNotCancelled(msg.taskId);
+              const chatgptUrl=location.origin+'/c/'+id;
+              const submittedReceipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId});
+              if(!submittedReceipt?.ok)throw Error('总结已生成，但书库未确认接收收藏任务');
+              const savedReceipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl});
+              if(!savedReceipt?.ok)throw Error('总结已生成，但书库未确认当前对话');
+              return chatgptUrl;
+            }).catch(error=>{showError(error.message);reportTarget(msg,false,error.message);});
           }else reportTarget(msg, true);
-          if(msg.libraryEligible&&!msg.tempChat){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId});if(!receipt?.ok)showError('总结已发送，但本次视频的书库待办登记失败；详情已记录到日志');}
+          if(msg.libraryEligible&&!msg.tempChat&&!msg.collect){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_SUBMITTED',taskId:msg.taskId});if(!receipt?.ok)showError('总结已发送，但本次视频的书库待办登记失败；详情已记录到日志');}
           // Submission succeeded — hide the save button now regardless of what happens next
           hideSaveButton();
           if (msg.bgOpen) scrollToResponseOnTabFocus();
@@ -1118,7 +1131,7 @@
               showRetryRenameButton(null, conversationTitle);
               return;
             }
-            if(msg.libraryEligible){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl:location.origin+'/c/'+conversationId});if(!receipt?.ok)throw new Error('总结已发送，但书库对话关系确认失败：'+(receipt?.error||'未收到回执'));}
+            if(msg.libraryEligible&&!msg.collect){const receipt=await chrome.runtime.sendMessage({type:'VIDSIFT_LIBRARY_CONFIRMED',taskId:msg.taskId,chatgptUrl:location.origin+'/c/'+conversationId});if(!receipt?.ok)throw new Error('总结已发送，但书库对话关系确认失败：'+(receipt?.error||'未收到回执'));}
             if(!conversationTitle){hideStatus();return;}
             showStatus('总结已发送；正在等待 ChatGPT 标题，随后自动改为视频名...');
             try {
@@ -1152,7 +1165,10 @@
           window.removeEventListener('pagehide', clearUnsentPrompt);
           for (const event of editEvents) window.removeEventListener(event, observeUserEdit, true);
           try { clearUnsentPrompt(); }
-          finally { if(generation)await generation;libraryBinding?.stop(); _taskActive = false; }
+          finally {
+            try{const savedUrl=await generation;if(savedUrl&&msg.collect)reportTarget(msg,true,null,savedUrl);}
+            finally{libraryBinding?.stop();_taskActive=false;}
+          }
         }
       })();
       return;

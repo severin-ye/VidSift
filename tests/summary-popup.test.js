@@ -4,17 +4,37 @@ const first='11111111-1111-1111-1111-111111111111',second='22222222-2222-2222-22
 const url=id=>'https://chatgpt.com/c/'+id;
 const row=id=>({id,chatgptUrl:url(id),videoUrl:'https://www.youtube.com/watch?v=abcdefghijk',title:'视频',createdAt:'2026-11-14T00:00:00Z'});
 function fixture({external,initialUrl=url(first),enabled=true}={}){
- let handler,current={id:7,url:initialUrl},active=7,score=6;const calls=[],updates=[];
+ let handler,current={id:7,url:initialUrl},active=7,score=6,video=row(first).videoUrl;const calls=[],updates=[],created=[];
  const context=vm.createContext({URL,console,VidSiftVideoLibrary:library,_videoLibrary:{getSettings:async()=>({extensionId:'library',enabled,reminderEnabled:false})},summaryDeadline:p=>p,
- chrome:{tabs:{get:async()=>({...current}),query:async()=>[{id:active}],update:async(id,args)=>{updates.push(args.url);current.url=args.url;}},runtime:{id:'self',getURL:p=>'chrome-extension://self/'+p,onMessage:{addListener:fn=>handler=fn},sendMessage:async(id,msg)=>{
+ VidSiftCurrentVideo:{discover:async()=>({source:{url:video}})},
+ chrome:{tabs:{get:async()=>({...current}),query:async()=>[{id:active}],create:async data=>{created.push(data.url);},update:async(id,args)=>{updates.push(args.url);current.url=args.url;}},runtime:{id:'self',getURL:p=>'chrome-extension://self/'+p,onMessage:{addListener:fn=>handler=fn},sendMessage:async(id,msg)=>{
   calls.push(msg);if(external){const replacement=await external(msg,{setUrl:u=>current.url=u,setActive:id=>active=id});if(replacement!==undefined)return replacement;}
-  if(msg.type==='ZHIXING_VIDSIFT_HELLO')return {ok:true,capabilities:['summary-context-v1','rate-video-v1']};
+  if(msg.type==='ZHIXING_VIDSIFT_HELLO')return {ok:true,capabilities:['summary-context-v1','rate-video-v1','list-video-v1','remove-video-v1']};
   if(msg.type==='ZHIXING_VIDSIFT_SET_VIDEO_RATING'){score=msg.score;return {ok:true,id:first,score};}
+  if(msg.type==='ZHIXING_VIDSIFT_REMOVE_VIDEO')return {ok:true,id:msg.chatgptUrl.split('/').at(-1)};
   return {ok:true,current:row(first),rating:score,records:[row(msg.cursor?second:first)],total:2,nextCursor:msg.cursor?null:'page2'};
  }}}});
  vm.runInContext(fs.readFileSync('background-summary-popup.js','utf8'),context);
- return {calls,updates,send:(extra={},sender={id:'self',url:'chrome-extension://self/popup.html'})=>new Promise(resolve=>handler({type:'VIDSIFT_POPUP_SUMMARY_CONTEXT',tabId:7,expectedUrl:initialUrl,...extra},sender,resolve))};
+ return {calls,updates,created,setVideo:value=>{video=value;},send:(extra={},sender={id:'self',url:'chrome-extension://self/popup.html'})=>new Promise(resolve=>{if(handler({type:'VIDSIFT_POPUP_SUMMARY_CONTEXT',tabId:7,expectedUrl:initialUrl,...extra},sender,resolve)===false)resolve();})};
 }
+test('video popup lists, opens and removes saved conversation records even with the completion reminder off',async()=>{
+ const expectedVideoUrl=row(first).videoUrl,f=fixture({initialUrl:expectedVideoUrl});
+ const result=await f.send({expectedVideoUrl,cursor:'page2'});
+ assert.equal(result.ok,true);assert.equal(result.records[0].id,second);
+ const action={recordId:second,expectedVideoUrl,cursor:'page2'};
+ assert.equal((await f.send({...action,type:'VIDSIFT_POPUP_SUMMARY_OPEN'})).ok,true);
+ assert.deepEqual(f.created,[url(second)]);assert.deepEqual(f.updates,[]);
+ assert.equal((await f.send({...action,type:'VIDSIFT_POPUP_SUMMARY_REMOVE'})).ok,true);
+ assert.equal(f.calls.at(-1).type,'ZHIXING_VIDSIFT_REMOVE_VIDEO');
+ assert.equal(f.calls.at(-1).chatgptUrl,url(second));
+ f.setVideo('https://www.youtube.com/watch?v=ZYXWVUTSRQP');
+ assert.equal((await f.send({...action,type:'VIDSIFT_POPUP_SUMMARY_REMOVE'})).code,'STALE_TAB');
+});
+test('GPT popup can remove its current conversation even when it is outside the visible page',async()=>{
+ const f=fixture();
+ const result=await f.send({type:'VIDSIFT_POPUP_SUMMARY_REMOVE',recordId:first,cursor:'page2'});
+ assert.equal(result.ok,true);assert.equal(f.calls.at(-1).chatgptUrl,url(first));
+});
 test('normal and custom GPT routes qualify, private credentials and unrelated URLs do not',()=>{
  const c={URL};vm.runInNewContext(fs.readFileSync('popup-summary.js','utf8'),c);const accepts=c.VidSiftSummaryPopup.conversationUrl;
  assert.ok(accepts(url(first)));assert.ok(accepts('https://chatgpt.com/g/g-abc/c/'+first));

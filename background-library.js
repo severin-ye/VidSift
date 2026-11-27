@@ -1,5 +1,19 @@
 'use strict';
 const _videoLibrary=new VidSiftVideoLibrary.VideoLibraryBridge(chrome,{onError:error=>_diagnostics.visibleError({component:'library',category:'library',message:'视频总结尚未保存到知行批注书库：'+error.message})});
+async function confirmVideoCollection(link){
+ const chatgptUrl=VidSiftVideoLibrary.conversationUrl(link);
+ if(!chatgptUrl)throw Error('收藏未确认本次 ChatGPT 对话，已保留页面，请勿重复发送');
+ const id=chatgptUrl.split('/').at(-1);
+ try{
+  await _videoLibrary.drain(id);
+  const {enabled,extensionId}=await _videoLibrary.getSettings();
+  if(enabled){
+   const result=await summaryDeadline(chrome.runtime.sendMessage(extensionId,{type:'ZHIXING_VIDSIFT_SUMMARY_CONTEXT',version:1,chatgptUrl,limit:10}),6000);
+   if(result?.ok&&result.current?.id===id)return;
+  }
+ }catch{}
+ throw Error('总结已生成，书库尚未确认收藏；已保留 ChatGPT 页面，可在扩展设置重试入库');
+}
 async function prepareVideoLibraryTask({taskId,targetTabId,source,legacyTask,openerTabId,videoTitle,tempChat}){
  if(tempChat||!taskId)return false;
  try{

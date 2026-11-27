@@ -42,7 +42,7 @@ async function sendVideoChatGPT(data){
  if(!target.ok){_targetCompletions.get(task.id)?.reject(new Error(target.error));throw new Error(target.error);}await target.completion;
 }
 async function sendVideoAIStudio(data){
- const tab=await createTaskTarget('https://aistudio.google.com/prompts/new_chat',false,data.openerTabId);
+ const tab=await createTaskTarget('https://aistudio.google.com/prompts/new_chat',false,data.openerTabId,!data.collect);
  recordTargetPhase(data.task,tab,'created-background');
  const completed=waitForTarget(data.task,tab.id);completed.catch(()=>{});
  _updateActiveTranscribeTask(data.task.taskKey??data.task.tabId,'AI Studio 已在后台创建，正在连接页面上传脚本...');
@@ -79,6 +79,7 @@ async function transcribeVideo(audio,data,notify,signal){
   try{result=await data.task.client.transcribeGroq(data.localAudio,data.groqSettings,text=>notify('STATUS',text));}
   catch(error){
    if(!/未配置.*GROQ_API_KEY/.test(error.message))throw error;
+   if(data.collect)throw Error('收藏需要 Groq 转写。请先在设置中配置 Groq API Key，再收藏当前视频');
    await groqCredentialPrompt().ensure({client:data.task.client,task:data.task,signal,assertLive:()=>_videoWorkflow.assertLive(data.task),onWait:()=>{
     diagnoseTask(data.task,'groq.key_required');notify('STATUS','请在新窗口填写 Groq API Key，保存后继续当前音频转写...');
    }});
@@ -166,6 +167,13 @@ async function prepareBilibiliSource(task,msg,captured){
  return result;
 }
 async function startVideoSummary(msg,notify){
+ if(msg.collect===true){
+  const {enabled,extensionId}=await _videoLibrary.getSettings();
+  if(!enabled)throw Error('收藏需要书库联动·开，请在扩展设置中开启');
+  const hello=await summaryDeadline(chrome.runtime.sendMessage(extensionId,{type:'ZHIXING_VIDSIFT_HELLO'}),6000).catch(()=>null);
+  if(!hello?.ok||!hello.capabilities?.includes('summary-context-v1'))throw Error('收藏需要能读取总结的知行批注书库，请检查书库扩展是否已启用和更新');
+  msg.bgOpen=true;msg.tempChat=false;
+ }
  let admission;
  const clicked=msg.clickedSource,identified=VidSiftPlatforms.identify(clicked?.url);
  const sourceLocked=identified?.platform==='douyin'&&clicked.platform==='douyin';
@@ -208,7 +216,10 @@ async function startVideoSummary(msg,notify){
   }
   const {title,subtitle}=prepared.source;
   if(subtitle&&!ScreenshotSettings.normalize(msg.screenshotSettings).enabled){
-   await handleTask({...msg,taskType:'chatgpt',biliTabId:tabId,videoTitle:title,bvid:source.videoId,file:{name:source.videoId+'.srt',content:VidSiftPlatforms.toSrt(subtitle.body)}},notify,task);
+   await handleTask({...msg,taskType:'chatgpt',biliTabId:tabId,videoTitle:title,bvid:source.videoId,file:{name:source.videoId+'.srt',content:VidSiftPlatforms.toSrt(subtitle.body)}},(type,text)=>{
+    if(msg.collect)_updateActiveTranscribeTask(taskKey,text);
+    notify(type,text);
+   },task);
   }else{
    msg.sourceClosed=task.sourceClosed===true;
    finishLegacyTask(task);
@@ -259,7 +270,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
  }
  if(msg.type==='VIDSIFT_TARGET_DONE'){
   const target=_targetCompletions.get(msg.taskId);
-  if(target&&target.tabId===sender.tab?.id){_diagnostics.record(msg.taskId,msg.ok?'target.completed':'target.failed',{accepted:!!msg.ok,category:msg.ok?'success':VidSiftDiagnostics.category(msg.error)},sender.tab.id);if(msg.ok)target.resolve({transcript:msg.transcript});else target.reject(new Error(msg.error||'目标页面上传失败'));}
+  if(target&&target.tabId===sender.tab?.id){_diagnostics.record(msg.taskId,msg.ok?'target.completed':'target.failed',{accepted:!!msg.ok,category:msg.ok?'success':VidSiftDiagnostics.category(msg.error)},sender.tab.id);if(msg.ok)target.resolve({transcript:msg.transcript,chatgptUrl:msg.chatgptUrl});else target.reject(new Error(msg.error||'目标页面上传失败'));}
   sendResponse({ok:!!target});return false;
  }
  if(msg.type==='VIDSIFT_TARGET_SENT'){
