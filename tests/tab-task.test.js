@@ -120,6 +120,68 @@ test('two rapid videos are serialized and a closed queued source still sends onc
  assert.equal(f.created.length,2);assert.equal(f.sent.filter(x=>x.msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT').length,2);
 });
 
+test('Bilibili parts selected in one tab keep their own subtitle after the player switches during upload',{timeout:4000},async()=>{
+ const f=fixture();
+ const work=(part,cid)=>({platform:'bilibili',videoId:'BV123abc',part,cid,key:'bilibili:BV123abc:'+part,url:sourceUrl+'?p='+part,frameId:0});
+ const first=work(1,101),second=work(2,102);
+ let selected=first,release,reached;
+ const uploading=new Promise(resolve=>reached=resolve),gate=new Promise(resolve=>release=resolve);
+ const tabs=f.context.chrome.tabs,get=tabs.get,send=tabs.sendMessage;
+ f.context.AbortSignal=AbortSignal;
+ tabs.get=async id=>id===7?{id,url:selected.url,index:0,windowId:1}:get(id);
+ f.context.VidSiftCurrentVideo={discover:async()=>({source:selected})};
+ f.context.fetch=async address=>{
+  const url=new URL(address);
+  if(url.pathname.endsWith('/view'))return {json:async()=>({code:0,data:{bvid:first.videoId,aid:1,title:'original',pages:[{cid:101},{cid:102}]}})};
+  if(url.pathname.endsWith('/v2'))return {json:async()=>({data:{subtitle:{subtitles:[{lan:'zh',subtitle_url:'https://fixture.invalid/'+url.searchParams.get('cid')}]}}})};
+  return {json:async()=>({body:[{from:0,to:1,content:'subtitle'+url.pathname}]})};
+ };
+ tabs.sendMessage=async(id,msg)=>{
+  if(msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT'&&msg.source.cid===101){reached();await gate;}
+  return send(id,msg);
+ };
+ function start(source){
+  f.context.clickedWork=source;
+  return vm.runInContext('startVideoSummary({openerTabId:7,sourceUrl:clickedWork.url,clickedSource:clickedWork},()=>{})',f.context);
+ }
+ const a=start(first);a.catch(()=>{});
+ let b;
+ try{
+  await Promise.race([uploading,a]);
+  selected=second;
+  tabs.onUpdated.listeners.forEach(listener=>listener(7,{url:second.url}));
+  b=start(second);b.catch(()=>{});
+  await new Promise(setImmediate);
+  assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:20})).sourceKey,first.key);
+  assert.equal((await f.dispatch({type:'GET_TAB_TRANSCRIBE_STATUS',tabId:7,sourceKey:second.key})).queuePosition,2);
+ }finally{release();await Promise.allSettled([a,b]);}
+ await Promise.all([a,b]);
+ assert.equal(f.sent.some(({msg})=>msg.type==='VIDSIFT_CANCEL_UPLOAD'),false);
+ const uploads=f.sent.filter(({msg})=>msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT');
+ assert.deepEqual(uploads.map(({msg})=>[msg.source.cid,msg.file.content.split('\n').at(-1)]),[[101,'subtitle/101'],[102,'subtitle/102']]);
+ assert.equal(vm.runInContext('_legacyGuard.tasks.size',f.context),0);
+});
+
+test('YouTube uses the selected video when the source tab has already navigated',async()=>{
+ const f=fixture();
+ const url='https://www.youtube.com/watch?v=abc123XYZ_0',next='https://www.youtube.com/watch?v=def456XYZ_0';
+ const get=f.context.chrome.tabs.get;
+ f.context.chrome.tabs.get=id=>id===7?Promise.resolve({id,url:next,index:0,windowId:1}):get(id);
+ f.context.clickedUrl=url;
+ await vm.runInContext(`
+  const clickedSource=VidSiftPlatforms.identify(clickedUrl);
+  _videoWorkflow.deps.client=()=>({
+   resolve:async({url})=>({platform:'youtube',videoId:VidSiftPlatforms.identify(url).videoId,subtitle:{body:[{from:0,to:1,content:url}]}}),
+   release:async()=>{},close(){}
+  });
+  startVideoSummary({openerTabId:7,sourceUrl:clickedUrl,clickedSource},()=>{});
+ `,f.context);
+ const uploads=f.sent.filter(({msg})=>msg.type==='VIDSIFT_CHATGPT_PREPARE_PROMPT');
+ assert.equal(uploads.length,1);
+ assert.equal(uploads[0].msg.source.videoId,'abc123XYZ_0');
+ assert.equal(uploads[0].msg.file.content.split('\n').at(-1),url);
+});
+
 test('canceling a queued video skips only that item and lets the next video run',async()=>{
  let release,reached,first=true;const gate=new Promise(r=>release=r),waiting=new Promise(r=>reached=r);
  const f=fixture({pauseReady:()=>{if(first){first=false;reached();return gate;}}});

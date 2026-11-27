@@ -48,7 +48,7 @@
     }
     localAudio=result.localAudio;
     assets=[result.audio,...(result.images||[])].filter(Boolean).map(a=>a.assetId);
-    if(task.sourceLocked&&(result.platform!==source.platform||String(result.videoId)!==source.videoId))throw new Error('解析到的作品与点击时的抖音作品不一致，未发送内容');
+    if(task.sourceLocked&&(result.platform!==source.platform||String(result.videoId)!==source.videoId))throw new Error('解析到的作品与点击的视频不一致，未发送内容');
     if(local&&localAudio&&resolvedMedia)await d.saveLocalMedia?.(task,result,msg.localSettings);
     log('native.completed',{hasSubtitle:!!result.subtitle?.body?.length,subtitleCount:result.subtitle?.body?.length||0,hasAudio:!!result.audio,duration:result.duration,imageCount:result.images?.length||0,
      subtitleStatus:result.subtitleStatus,originalBytes:result.audioInfo?.originalBytes,outputBytes:result.audioInfo?.outputBytes,

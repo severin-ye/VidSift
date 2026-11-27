@@ -18,7 +18,7 @@ function recordTargetCancellation(task){
  _targetDiagnostics.set(task.id,record);chrome.storage?.local?.set({vidsiftLastTargetDiagnostic:record}).catch(()=>{});
 }
 async function verifySourceChange(task){
- if(task.sourceClosed)return;
+ if(task.sourceClosed||task.sourceLocked)return;
  // SPA notifications can arrive late; only the current top-level tab URL may
  // cancel the task, never an event's old URL or a mere change of focused tab.
  const current=await chrome.tabs.get(task.tabId);
@@ -175,17 +175,15 @@ async function startVideoSummary(msg,notify){
   msg.bgOpen=true;msg.tempChat=false;
  }
  let admission;
- const clicked=msg.clickedSource,identified=VidSiftPlatforms.identify(clicked?.url);
- const sourceLocked=identified?.platform==='douyin'&&clicked.platform==='douyin';
- if(sourceLocked){
-  if(identified.key!==clicked.key||identified.videoId!==clicked.videoId||msg.clickedPageSource&&String(msg.clickedPageSource.videoId)!==identified.videoId)throw new Error('已采集作品与点击的抖音作品不一致，未发送内容');
+ const clicked=msg.clickedSource;
+ if(clicked){
+  const identified=VidSiftPlatforms.identify(clicked.url);
+  if(!identified||identified.key!==clicked.key||identified.videoId!==clicked.videoId||identified.platform!==clicked.platform||msg.clickedPageSource&&String(msg.clickedPageSource.videoId)!==identified.videoId)throw new Error('已采集作品与点击的视频不一致，未发送内容');
   // The popup displays this verified work. Later feed navigation cannot change its identity.
-  admission={source:{...clicked,url:'https://www.douyin.com/video/'+identified.videoId},pageSource:msg.clickedPageSource};
- }else if(clicked){
-  try{admission=await VidSiftCurrentVideo.discover(chrome,await chrome.tabs.get(msg.openerTabId));}
-  catch(error){if(!/No tab with id\b|标签页不存在|不存在的标签页/i.test(String(error?.message||error)))throw error;admission={source:clicked,pageSource:msg.clickedPageSource};msg.sourceClosed=true;}
-  if(admission.source.key!==clicked.key||admission.source.frameId!==clicked.frameId)throw new Error('源视频已切换，请重新打开扩展后总结当前视频');
+  const url=identified.platform==='douyin'?'https://www.douyin.com/video/'+identified.videoId:identified.url;
+  admission={source:{...clicked,...identified,url},pageSource:msg.clickedPageSource};
  }
+ const sourceLocked=!!admission;
  if(admission)msg.sourceUrl=admission.source.url;
  const source=admission?.source||VidSiftPlatforms.identify(msg.sourceUrl);
  if(!source)throw new Error('视频来源无效');
@@ -282,7 +280,7 @@ chrome.runtime.onMessage.addListener((msg,sender,sendResponse)=>{
  if(msg.type==='CANCEL_VIDEO_TASK'){
   const requestedId=sender.tab?.id??msg.tabId;
   const target=_targetSourceTabs.get(requestedId),taskKey=target?.taskKey??VidSiftPlatforms.taskKey(requestedId,msg.sourceKey);
-  if(target?.sourceLocked&&_videoWorkflow.tasks.get(taskKey)?.id!==target.id){sendResponse({ok:false});return false;}
+  if(target?.sourceLocked&&(_videoWorkflow.tasks.get(taskKey)||_legacyGuard.get(taskKey))?.id!==target.id){sendResponse({ok:false});return false;}
   const cancelled=_videoWorkflow.cancel(taskKey);const legacy=_legacyGuard.cancel(taskKey);
   if(legacy){if(legacy.targetTabId)chrome.tabs.sendMessage(legacy.targetTabId,{type:'VIDSIFT_CANCEL_UPLOAD',taskId:legacy.id}).catch(()=>{});_targetCompletions.get(legacy.id)?.reject(new Error('视频任务已取消'));_clearActiveTranscribeTask(taskKey);}
   sendResponse({ok:cancelled||!!legacy});return false;

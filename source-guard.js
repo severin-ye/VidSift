@@ -24,7 +24,7 @@
    if(task.cancelled||this.tasks.get(task.taskKey)!==task)throw new Error('视频任务已取消或被替代，未发送内容');
   }
   cancel(tabId){const task=this.tasks.get(tabId);if(task){task.cancelled=true;task.abort?.();}return task;}
-  finish(task){if(this.tasks.get(task.taskKey)===task)this.tasks.delete(task.tabId);}
+   finish(task){if(this.tasks.get(task.taskKey)===task)this.tasks.delete(task.taskKey);}
  }
  root.SourceGuard=SourceGuard;if(typeof module!=='undefined')module.exports={SourceGuard};
 })(globalThis);

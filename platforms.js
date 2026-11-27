@@ -50,6 +50,6 @@
    if(!String(result).trim())throw new Error('转写服务未返回有效字幕结果');return result;
   }finally{reader.releaseLock();}
  }
- function taskKey(tabId,sourceKey){return /^douyin:\d+$/.test(sourceKey||'')?`${tabId}/${sourceKey}`:tabId;}
+ function taskKey(tabId,sourceKey){return /^(?:douyin:\d+|bilibili:BV\w+:\d+|youtube:[\w-]{11})$/.test(sourceKey||'')?`${tabId}/${sourceKey}`:tabId;}
  const api={identify,taskKey,srtTime,toSrt,readTranscription};root.VidSiftPlatforms=api;if(typeof module!=='undefined')module.exports=api;
 })(globalThis);

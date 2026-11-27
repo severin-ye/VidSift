@@ -137,7 +137,7 @@ function setStatus(msg) {
 async function getActiveTranscribeTask(tabId) {
   statusTabId = tabId;
   try {
-    const result = await chrome.runtime.sendMessage({ type: 'GET_TAB_TRANSCRIBE_STATUS', tabId, sourceKey: currentPlatform==='douyin'?sourceDiscoverySnapshot.source.key:undefined, includeQueue: !currentPlatform });
+    const result = await chrome.runtime.sendMessage({ type: 'GET_TAB_TRANSCRIBE_STATUS', tabId, sourceKey: sourceDiscoverySnapshot?.source?.key, includeQueue: !currentPlatform });
     if (!result) throw new Error('扩展后台未响应，请在扩展管理页重新加载知行视频总结');
     return result;
   } catch (e) {

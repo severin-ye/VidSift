@@ -216,7 +216,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GET_TAB_TRANSCRIBE_STATUS') {
     const target=_targetSourceTabs.get(msg.tabId);
     let sourceTabId=target?.tabId??msg.tabId,taskKey=target?.taskKey??VidSiftPlatforms.taskKey(sourceTabId,msg.sourceKey);
-    if(target?.sourceLocked&&_videoWorkflow.tasks.get(taskKey)?.id!==target.id){sendResponse({sourceTabId,active:false});return false;}
+    if(target?.sourceLocked&&(_videoWorkflow.tasks.get(taskKey)||_legacyGuard.get(taskKey))?.id!==target.id){sendResponse({sourceTabId,active:false});return false;}
     if(msg.includeQueue&&!target&&!_getActiveTranscribeTask(taskKey)&&!_legacyGuard.get(taskKey)&&_summaryQueue.length){
       ({sourceTabId,taskKey}=_summaryQueue[0]);
     }
